@@ -109,6 +109,8 @@ export class FootSystem {
   readonly feet: [Foot, Foot] = [new Foot(-1), new Foot(1)];
   /** World horizontal velocity the stance legs sweep the body at (leg drive). */
   readonly driveVel = new THREE.Vector3();
+  /** Yaw rate (rad/s) the planted legs twist the hips at (turning in place; friction limited). */
+  twistRate = 0;
   /** Extra leg length (m) commanded by the controller, e.g. jump extension. */
   legExtension = 0;
   legExtensionRate = 0;
@@ -123,6 +125,8 @@ export class FootSystem {
   /** Stance frame: heading only (the legs stay under the hips whatever the torso does). */
   readonly frameQ = new THREE.Quaternion();
   frameYaw = 0;
+  /** Legs turn with the body (upright) or keep their own heading (down). */
+  followsBody = true;
   /** Legs cannot get under the body (it is upside down). */
   legsDisabled = false;
   /** True on the substep the legs become usable again (controller re-plants feet). */
@@ -145,13 +149,18 @@ export class FootSystem {
     const q = q4(this.body.rotation());
     const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
     const up = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
-    let hx = fwd.x, hz = fwd.z;
-    if (Math.hypot(hx, hz) < 0.25) { hx = up.x * Math.sign(-fwd.y || 1); hz = up.z * Math.sign(-fwd.y || 1); }
-    if (Math.hypot(hx, hz) > 1e-6) this.frameYaw = Math.atan2(hx, hz);
+    // While he is reasonably upright the legs turn with him; while he is down they keep their
+    // heading and the hip twists freely (no yaw coupling), so a tumbling body cannot drag the
+    // planted feet around.
+    const wasFollowing = this.followsBody;
+    this.followsBody = up.y > 0.7;
+    // going down: the legs scramble under the hips (feet re-planted below them)
+    this.regained = wasFollowing && !this.followsBody;
+    if (this.followsBody && Math.hypot(fwd.x, fwd.z) > 1e-3) this.frameYaw = Math.atan2(fwd.x, fwd.z);
     this.frameQ.setFromAxisAngle(UP, this.frameYaw);
     const wasDisabled = this.legsDisabled;
     this.legsDisabled = up.y < -0.3;
-    this.regained = wasDisabled && !this.legsDisabled;
+    this.regained = this.regained || (wasDisabled && !this.legsDisabled);
     if (this.regained || (!wasDisabled && this.legsDisabled)) {
       for (const f of this.feet) { f.phase = 'air'; f.noContactTime = 0; f.legOffset = 0; for (const p of f.points) p.state = 'air'; }
     }
@@ -189,7 +198,7 @@ export class FootSystem {
     const q = this.frameQ;
     const qi = q.clone().invert();
     const vHip = v3(body.velocityAtPoint(hip), new THREE.Vector3());
-    const wy = body.angvel().y;
+    const wy = this.followsBody ? body.angvel().y : 0;
     const invM = body.invMass();
     const Iinv = body.effectiveWorldInvInertia();
     const localDrive = this.driveVel.clone().applyQuaternion(qi);
@@ -200,6 +209,13 @@ export class FootSystem {
       if (foot.phase === 'stance') {
         foot.center.x -= localDrive.x * dt;
         foot.center.y -= localDrive.z * dt;
+        if (this.twistRate !== 0) {
+          // planted feet rotate backwards about the hip: through friction this turns the body
+          const a = -this.twistRate * dt, c = Math.cos(a), sn = Math.sin(a);
+          const x = foot.center.x, z = foot.center.y;
+          foot.center.set(c * x + sn * z, -sn * x + c * z);
+          foot.yaw += a;
+        }
       }
       this.updateLocal(foot);
       let anyContact = false;
@@ -209,7 +225,10 @@ export class FootSystem {
         const r = tmpP.copy(cp.world).sub(hip);
         // points move with the hip, the body's yaw rate and the leg setpoint motion
         cp.vel.set(vHip.x + wy * r.z, vHip.y, vHip.z - wy * r.x); // + (0,wy,0) × r
-        if (foot.phase === 'stance') cp.vel.add(tmpV.set(-localDrive.x, 0, -localDrive.z).applyQuaternion(q));
+        if (foot.phase === 'stance') {
+          cp.vel.add(tmpV.set(-localDrive.x, 0, -localDrive.z).applyQuaternion(q));
+          cp.vel.x -= this.twistRate * r.z; cp.vel.z += this.twistRate * r.x; // (0,-twist,0) × r
+        }
         cp.vel.y -= this.legExtensionRate;
         cp.force.set(0, 0, 0);
         cp.N = 0; cp.usage = 0;
@@ -272,11 +291,19 @@ export class FootSystem {
     const n = Math.max(1, contacts.length);
     const cn = Math.min(tun.footNormalDamping, 0.6 / (invM * dt * n));
     const kn = Math.min(tun.footNormalStiffness, 0.3 / (invM * dt * dt * n));
+    // A damper may at most stop the hips' downward motion this substep, never fling them back up.
+    const mBody = 1 / invM;
+    const maxDampN = mBody * Math.max(0, -vHip.y) / dt / n;
     for (const cp of contacts) {
-      let N = kn * cp.depth - cn * cp.vel.y;
+      const damp = THREE.MathUtils.clamp(-cn * cp.vel.y, -kn * cp.depth, maxDampN);
+      let N = kn * cp.depth + damp;
       if (!tun.cheatStickyFeet) N = Math.max(0, N);
       cp.N = N;
     }
+    // legs are strong, not infinitely so: total push at most 3x the warrior + sword weight
+    const Nmax = 3 * (tun.warriorMass + tun.swordMass) * 9.81;
+    const Nsum = contacts.reduce((a, cp) => a + Math.max(0, cp.N), 0);
+    if (Nsum > Nmax) for (const cp of contacts) cp.N *= Nmax / Nsum;
     if (this.thrust > 0 && contacts.length > 0) {
       const share = this.thrust / contacts.length;
       for (const cp of contacts) cp.N += share;
@@ -296,7 +323,7 @@ export class FootSystem {
     // --- friction ---
     // Response of the contact points to friction impulses: they move with the hip (whole-body
     // translation) and with the body's yaw (the stance frame turns with the heading).
-    const Iyy = Iinv.m22;
+    const Iyy = this.followsBody ? Iinv.m22 : 0;
     const respond = (js: THREE.Vector3[], pts: ContactPoint[]) => {
       const P = new THREE.Vector3();
       let My = 0;
@@ -382,7 +409,7 @@ export class FootSystem {
       groundY += cp.groundY * cp.Neff / Ntot;
     }
     Ft.divideScalar(dt);
-    Myaw /= dt;
+    Myaw = this.followsBody ? Myaw / dt : 0; // a freely twisting hip passes no yaw torque
     const L = hip.y - groundY; // hip height above the contact plane
     // CoP offset d (horizontal, from the hip) so that the moment about the hip equals the request:
     //   M = d × (N·up) + (-L·up) × Ft   =>   d × (N·up) = tau + L·(up × Ft)
@@ -394,6 +421,9 @@ export class FootSystem {
     this.cop.set(copXZ.x, groundY, copXZ.z);
     const d = new THREE.Vector3(copXZ.x - hip.x, 0, copXZ.z - hip.z);
     const M = new THREE.Vector3(-d.z * Ntot, 0, d.x * Ntot).add(new THREE.Vector3(-Ft.z, 0, Ft.x).multiplyScalar(L));
+    // the hips can only carry so much: never pass on more tilting torque than their strength
+    const hm = M.length();
+    if (hm > tun.hipMaxTorque) M.multiplyScalar(tun.hipMaxTorque / hm);
     this.hipTorque.copy(M);
     M.y += Myaw;
 

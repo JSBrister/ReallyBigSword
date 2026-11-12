@@ -31,6 +31,8 @@ export interface Tunables {
   // --- locomotion ---
   walkSpeed: number; // m/s commanded
   walkAccel: number; // m/s^2, how fast the commanded leg sweep may change
+  standUpDelay: number; // s on the floor before he is put back on his feet (explicit rule)
+  turnRate: number; // rad/s, how fast the legs try to turn the body while walking
   driveMaxLag: number; // m/s, how far the leg sweep may run ahead of the hips before it re-syncs
   walkPlacementLag: number; // s, how far behind the capture point steps land while walking
   stepDuration: number; // s
@@ -77,11 +79,13 @@ export const defaultTunables: Tunables = {
   swordHoldGain: 25,
   swordMotorFactor: 60000,
   swordMaxLead: 0.6,
-  swordMaxRate: 14,
+  swordMaxRate: 10,
   reachSpeed: 1.6,
 
   walkSpeed: 1.6,
   walkAccel: 4,
+  turnRate: 2.5,
+  standUpDelay: 2.5,
   driveMaxLag: 0.5,
   walkPlacementLag: 0.12,
   stepDuration: 0.3,

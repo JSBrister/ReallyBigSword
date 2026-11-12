@@ -59,6 +59,8 @@ export class Input {
     if (k.has('KeyD')) out.move.add(right);
     if (k.has('KeyA')) out.move.sub(right);
     if (out.move.lengthSq() > 1) out.move.normalize();
+    // while walking, the legs try to turn him to face where the camera looks
+    out.face = out.move.lengthSq() > 0.01 ? cameraYaw : null;
 
     // drag velocity (px/s), lightly smoothed so a held mouse means "hold"
     const inst = this.dragAccum.clone().divideScalar(Math.max(dt, 1e-3));

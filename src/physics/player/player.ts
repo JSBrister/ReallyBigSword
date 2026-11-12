@@ -26,9 +26,11 @@ export interface PlayerCommand {
   /** Grip reach rate, m/s (+ = push sword away from body). */
   reach: number;
   jump: boolean;
+  /** Heading for the legs to turn toward (rad), or null. */
+  face: number | null;
 }
 
-export const emptyCommand = (): PlayerCommand => ({ move: new THREE.Vector3(), swingYaw: 0, swingPitch: 0, reach: 0, jump: false });
+export const emptyCommand = (): PlayerCommand => ({ move: new THREE.Vector3(), swingYaw: 0, swingPitch: 0, reach: 0, jump: false, face: null });
 
 export interface SpawnOptions {
   /** Ground point under the warrior. */
@@ -58,8 +60,14 @@ export class Player implements ActuatedBodies {
   readonly swingCmd = new THREE.Vector3();
   /** Seconds the warrior has been toppled (legs out of reach of the ground). */
   fallenTime = 0;
+  /** Seconds since he was last on the floor (the grip returns the sword to rest meanwhile). */
+  private sinceUp = 99;
   /** Set by tests to bypass input mapping and command the sword in world frame directly. */
   swordCmdOverride: THREE.Vector3 | null = null;
+  /** Use the explicit stand-up rule (tests that study toppling switch it off). */
+  autoStandUp = true;
+  /** How many times the stand-up rule has fired (HUD message). */
+  stoodUp = 0;
   health = 100;
   readonly maxHealth = 100;
   private pendingJump = false;
@@ -160,6 +168,16 @@ export class Player implements ActuatedBodies {
   }
 
   /** Remove all bodies and rebuild at a new spawn (also picks up changed mass/length tunables). */
+  /** Put him back on his feet at his current spot (keeps health). */
+  standUpInPlace(): void {
+    const p = v3(this.body.translation());
+    const ground = this.feet.probe(p, 0.5, 4).y;
+    const hp = this.health;
+    this.respawn({ position: new THREE.Vector3(p.x, ground > -1e6 ? ground : 0, p.z), heading: this.feet.frameYaw });
+    this.health = hp;
+    this.stoodUp++;
+  }
+
   respawn(spawn: SpawnOptions): void {
     const world = this.pw.world;
     world.removeImpulseJoint(this.gripJoint, true);
@@ -185,7 +203,7 @@ export class Player implements ActuatedBodies {
     const pelvisQ = q4(this.pelvis.rotation());
 
     this.feet.updateFrame();
-    this.gait.update(dt, { move: cmd.move, jump: this.pendingJump }, this.state, pelvisPos, this.feet.frameQ,
+    this.gait.update(dt, { move: cmd.move, jump: this.pendingJump, faceYaw: cmd.face }, this.state, pelvisPos, this.feet.frameQ,
       pelvisQ, v3(this.body.angvel()), v3(this.body.linvel()));
     this.pendingJump = false;
 
@@ -205,7 +223,9 @@ export class Player implements ActuatedBodies {
       cmdW.set(0, cmd.swingYaw, 0).addScaledVector(pitchAxis, cmd.swingPitch);
     }
     // while toppled the warrior relaxes his grip (a choice, not a cheat: less internal torque)
-    this.swordAct.strength = this.fallen ? 0.05 : Math.min(1, this.swordAct.strength + dt * 0.7);
+    this.swordAct.strength = this.fallen ? 0.05 : Math.min(1, this.swordAct.strength + dt * 0.5);
+    this.sinceUp = this.fallen ? 0 : this.sinceUp + dt;
+    this.swordAct.restRate = this.sinceUp < 2.5 ? 1.2 : 0;
     this.swordAct.apply(this, cmdW, dt);
 
     // reach
@@ -226,5 +246,8 @@ export class Player implements ActuatedBodies {
     this.gripWorld.copy(this.gripLocal).applyQuaternion(q4(this.torso.rotation())).add(v3(this.torso.translation()));
     this.swordAct.measure(this, this.gripWorld, dt);
     this.fallenTime = this.fallen ? this.fallenTime + dt : 0;
+    // Explicit, visible game rule (not a force): if the legs have not got him up after a while,
+    // he is put back on his feet where he lies. Reported in the README as a deviation.
+    if (this.autoStandUp && this.fallenTime > this.tun.standUpDelay) this.standUpInPlace();
   }
 }

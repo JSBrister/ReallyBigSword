@@ -21,6 +21,8 @@ import { withForceAuthority } from '../forceGuard';
 import { q4, quatToRotVec, rotVecToQuat, v3, worldInertia } from '../mathUtil';
 
 const ANG_AXES = [3, 4, 5] as const; // JointAxis.AngX/AngY/AngZ
+/** Rest pose of the sword relative to the body: upright. */
+const REST = new THREE.Quaternion();
 
 interface RawJointSet {
   jointConfigureMotorModel(h: number, axis: number, model: number): void;
@@ -89,8 +91,10 @@ export class SwordActuator {
     this.havePrev = false;
   }
 
-  /** 0..1 strength multiplier chosen by the controller (relaxed grip while scrambling up). */
+  /** 0..1 strength multiplier chosen by the controller (relaxed grip while toppled). */
   strength = 1;
+  /** rad/s at which an idle grip returns the sword to its rest pose (0 = just hold). */
+  restRate = 0;
 
   apply(b: ActuatedBodies, cmdWorld: THREE.Vector3, dt: number): void {
     const tun = this.tun;
@@ -123,6 +127,10 @@ export class SwordActuator {
     if (this.strength < 1) {
       // relaxed: let the sword settle where it lies instead of holding the old pose
       this.qTarget.slerp(tqRel, 1 - this.strength);
+    }
+    if (this.restRate > 0 && cmdWorld.lengthSq() < 1e-6) {
+      // bring the sword back to its rest pose (upright in front) at a limited rate
+      this.qTarget.rotateTowards(REST, this.restRate * dt);
     }
     const vTarget = tc.copy(cmdLocal).addScaledVector(err, tun.swordHoldGain);
     setMotorVelocity(b.gripJoint, vTarget, tun.swordMotorFactor);

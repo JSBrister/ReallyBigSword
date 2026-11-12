@@ -207,7 +207,13 @@ export class Game {
     this.hud.setHealth(this.player.health, this.player.maxHealth);
   }
 
+  private lastStoodUp = 0;
   private gameLogic(dt: number): void {
+    if (this.player.stoodUp !== this.lastStoodUp) {
+      this.lastStoodUp = this.player.stoodUp;
+      this.hud.message(['Heave!', 'Hup!', 'Nnngh... up.', 'Dignity restored (mostly)'][this.lastStoodUp % 4], 1.2);
+      this.warrior.resetCape();
+    }
     const pp = v3(this.player.body.translation());
     const room = this.level.roomAt(pp);
     if (room >= 0 && room !== this.currentRoom) {

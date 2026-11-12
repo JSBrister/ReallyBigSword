@@ -17,6 +17,7 @@ describe('balance, toppling and spinning', () => {
 
   it('holding the sword horizontally out front with no corrective input topples the warrior', async () => {
     const { player, run } = await makeSandbox({}, { swordDir: new THREE.Vector3(0, 0, 1) });
+    player.autoStandUp = false;
     let fell = false;
     run(3, () => { if (player.fallen) fell = true; });
     expect(fell).toBe(true);

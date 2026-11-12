@@ -16,6 +16,8 @@ export interface GaitInput {
   /** World-space horizontal desired direction, |move| <= 1. */
   move: THREE.Vector3;
   jump: boolean;
+  /** Heading (rad, 0 = +Z) the legs should turn the body toward, or null to leave it alone. */
+  faceYaw: number | null;
 }
 
 const smooth = (t: number) => t * t * (3 - 2 * t);
@@ -70,6 +72,14 @@ export class GaitController {
       this.vDrive.set(hipVel.x, 0, hipVel.z).addScaledVector(acc, dt);
     }
     feet.driveVel.copy(this.vDrive);
+
+    // --- turning: the stance legs twist the hips toward the wanted heading (friction limited) ---
+    if (input.faceYaw !== null && !this.airborne && !feet.legsDisabled) {
+      let e = input.faceYaw - feet.frameYaw;
+      while (e > Math.PI) e -= 2 * Math.PI;
+      while (e < -Math.PI) e += 2 * Math.PI;
+      feet.twistRate = THREE.MathUtils.clamp(3 * e, -tun.turnRate, tun.turnRate);
+    } else feet.twistRate = 0;
 
     // --- support polygon, capture point, lean ---
     const pts: { x: number; z: number }[] = [];
