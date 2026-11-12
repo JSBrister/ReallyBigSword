@@ -15,14 +15,19 @@ import { FootSystem } from './feet';
 import { GaitController } from './controller';
 import { SwordActuator, applyReach, applyAirControlCheat, type ActuatedBodies } from './actuators';
 import { systemState, type SystemState } from './metrics';
+import { MoveController, type AttackName } from './moves';
 
 export interface PlayerCommand {
   /** World-space horizontal move direction, |move| <= 1. */
   move: THREE.Vector3;
-  /** Sword swing about the vertical axis, rad/s (+ = counter-clockwise seen from above). */
-  swingYaw: number;
-  /** Sword swing up/down, rad/s (+ = tip up). */
-  swingPitch: number;
+  /** Swing effort: x + = swing right (clockwise seen from above), y + = tip up. |effort| <= 1. */
+  effort: THREE.Vector2;
+  /** Hold the sword where it is (otherwise it follows through on its own momentum). */
+  grip: boolean;
+  /** Named attack requested this frame (edge). */
+  attack: AttackName | null;
+  /** Spin attack continues while held. */
+  spinHeld: boolean;
   /** Grip reach rate, m/s (+ = push sword away from body). */
   reach: number;
   jump: boolean;
@@ -30,7 +35,10 @@ export interface PlayerCommand {
   face: number | null;
 }
 
-export const emptyCommand = (): PlayerCommand => ({ move: new THREE.Vector3(), swingYaw: 0, swingPitch: 0, reach: 0, jump: false, face: null });
+export const emptyCommand = (): PlayerCommand => ({
+  move: new THREE.Vector3(), effort: new THREE.Vector2(), grip: false, attack: null, spinHeld: false,
+  reach: 0, jump: false, face: null,
+});
 
 export interface SpawnOptions {
   /** Ground point under the warrior. */
@@ -53,6 +61,14 @@ export class Player implements ActuatedBodies {
   feet!: FootSystem;
   gait!: GaitController;
   readonly swordAct: SwordActuator;
+  readonly moves = new MoveController();
+  /** Balance governor multiplier on swing effort (1 when the governor is off). */
+  governorScale = 1;
+  /** Balance-reflex multiplier on swing effort. */
+  reflexScale = 1;
+  /** The sword has come to rest after a swing and is being carried (hold mode). */
+  settled = true;
+  private slowTime = 0;
   readonly state: SystemState = { mass: 0, com: new THREE.Vector3(), vcom: new THREE.Vector3(), P: new THREE.Vector3(), L: new THREE.Vector3() };
   reach = 0;
   readonly gripLocal = new THREE.Vector3();
@@ -202,31 +218,69 @@ export class Player implements ActuatedBodies {
     const pelvisPos = v3(this.pelvis.translation());
     const pelvisQ = q4(this.pelvis.rotation());
 
+    // swing intent: named attacks, effort, grip and how braced the legs should be
+    const sq = q4(this.sword.rotation());
+    const sdir = new THREE.Vector3(0, 1, 0).applyQuaternion(sq);
+    const mv = this.moves.update(dt, { effort: cmd.effort, grip: cmd.grip, attack: cmd.attack, spinHeld: cmd.spinHeld },
+      {
+        elevation: Math.asin(THREE.MathUtils.clamp(sdir.y, -1, 1)), tipHeight: this.swordTip.y - (this.feet.cop.y || 0),
+        spinHeld: cmd.spinHeld, relSpeed: v3(this.sword.angvel()).sub(v3(this.body.angvel())).length(), peak: 0,
+        planted: this.feet.feet.every((f) => f.phase === 'stance' && f.inContact) && this.gait.timeSinceLand > 0.1,
+        touching: this.swordTouching,
+      },
+      !this.fallen && !this.swordCmdOverride);
+    cmd.attack = null;
+    const horiz = new THREE.Vector3(sdir.x, 0, sdir.z);
+    if (horiz.lengthSq() < 0.01) horiz.set(0, 0, 1).applyQuaternion(pelvisQ).setY(0);
+    this.gait.setBrace(mv.brace, mv.braceKind === 'pitch' ? horiz.normalize() : null, dt);
+
     this.feet.updateFrame();
     this.gait.update(dt, { move: cmd.move, jump: this.pendingJump, faceYaw: cmd.face }, this.state, pelvisPos, this.feet.frameQ,
       pelvisQ, v3(this.body.angvel()), v3(this.body.linvel()));
     this.pendingJump = false;
 
-    // sword command: yaw about world up, pitch about the horizontal axis across the blade
-    const cmdW = this.swingCmd;
-    if (this.swordCmdOverride) cmdW.copy(this.swordCmdOverride);
-    else {
-      const sdir = new THREE.Vector3(0, 1, 0).applyQuaternion(q4(this.sword.rotation()));
-      let pitchAxis = new THREE.Vector3().crossVectors(sdir, UP);
-      if (pitchAxis.lengthSq() < 0.04) {
-        // blade near vertical: pitch about the torso's right axis instead
-        const tq = q4(this.torso.rotation());
-        pitchAxis = new THREE.Vector3(-1, 0, 0).applyQuaternion(tq);
-        if (sdir.y < 0) pitchAxis.negate();
-      }
-      pitchAxis.normalize();
-      cmdW.set(0, cmd.swingYaw, 0).addScaledVector(pitchAxis, cmd.swingPitch);
-    }
+    const tilt = Math.acos(THREE.MathUtils.clamp(new THREE.Vector3(0, 1, 0).applyQuaternion(pelvisQ).y, -1, 1));
+    // balance reflex (part of bracing): ease off the swing as he starts to go over. Only ever
+    // weakens the internal actuator.
+    this.reflexScale = tun.balanceReflex ? 1 - THREE.MathUtils.clamp((tilt - 0.3) / 0.4, 0, 1) : 1;
+    // optional balance governor: weaken the swing while the feet cannot hold the reaction
+    if (tun.governor) {
+      const trouble = this.feet.torqueDeficit > 800 || tilt > 0.45;
+      this.governorScale = THREE.MathUtils.clamp(this.governorScale + (trouble ? -4 : 3) * dt, 0.25, 1);
+    } else this.governorScale = 1;
+
     // while toppled the warrior relaxes his grip (a choice, not a cheat: less internal torque)
     this.swordAct.strength = this.fallen ? 0.05 : Math.min(1, this.swordAct.strength + dt * 0.5);
     this.sinceUp = this.fallen ? 0 : this.sinceUp + dt;
     this.swordAct.restRate = this.sinceUp < 2.5 ? 1.2 : 0;
-    this.swordAct.apply(this, cmdW, dt);
+    const restoring = this.swordAct.restRate > 0 && mv.effort.lengthSq() < 1e-4 && !mv.grip && !this.fallen;
+    // follow-through, then settle: after a swing the sword coasts on its own momentum; once it has
+    // (nearly) stopped relative to him he settles his grip and carries it there
+    const relSpeed = v3(this.sword.angvel()).sub(v3(this.body.angvel())).length();
+    if (mv.effort.lengthSq() > 0.0025 || this.fallen) { this.settled = false; this.slowTime = 0; }
+    else if (!this.settled) {
+      this.slowTime = relSpeed < 0.5 ? this.slowTime + dt : 0;
+      if (this.slowTime > 0.2) this.settled = true;
+    }
+
+    if (this.swordCmdOverride) {
+      // tests: drive the relative angular velocity directly (hold mode)
+      this.swordAct.apply(this, this.swingCmd.copy(this.swordCmdOverride), dt);
+    } else if (mv.grip || restoring || this.settled) {
+      this.swordAct.apply(this, this.swingCmd.set(0, 0, 0), dt);
+    } else {
+      // effort: about world up for left/right, about the horizontal axis across the blade for up/down
+      let pitchAxis = new THREE.Vector3().crossVectors(sdir, UP);
+      if (pitchAxis.lengthSq() < 0.04) {
+        pitchAxis = new THREE.Vector3(-1, 0, 0).applyQuaternion(pelvisQ);
+        if (sdir.y < 0) pitchAxis.negate();
+      }
+      pitchAxis.normalize();
+      const effortW = new THREE.Vector3(0, -mv.effort.x, 0).addScaledVector(pitchAxis, mv.effort.y)
+        .multiplyScalar(tun.swordEffort * this.governorScale * this.reflexScale);
+      this.swordAct.resting = this.swordTouching;
+      this.swordAct.applyFree(this, effortW, v3(this.sword.translation()), dt);
+    }
 
     // reach
     if (cmd.reach !== 0) {
@@ -242,7 +296,16 @@ export class Player implements ActuatedBodies {
     if (tun.cheatAirControl && this.gait.airborne) applyAirControlCheat(this.bodies, cmd.move, dt);
   }
 
+  /** Is the blade touching anything (ground, wall, goblin)? Read from the narrow phase. */
+  swordTouching = false;
+
   postStep(dt: number): void {
+    let touching = false;
+    this.pw.world.contactPairsWith(this.swordBlade, (other) => {
+      if (touching) return;
+      this.pw.world.contactPair(this.swordBlade, other, (m) => { if (m.numSolverContacts() > 0) touching = true; });
+    });
+    this.swordTouching = touching;
     this.gripWorld.copy(this.gripLocal).applyQuaternion(q4(this.torso.rotation())).add(v3(this.torso.translation()));
     this.swordAct.measure(this, this.gripWorld, dt);
     this.fallenTime = this.fallen ? this.fallenTime + dt : 0;

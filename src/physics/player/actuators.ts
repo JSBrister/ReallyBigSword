@@ -3,7 +3,8 @@
  *
  * Every actuator here acts *between* two player bodies, so whatever it does to one body it
  * does equal-and-opposite to the other:
- *  - Sword actuator: warrior <-> sword at the grip. Implemented as Rapier spherical-joint angular
+ *  - Sword actuator: warrior <-> sword at the grip. In FREE mode an explicit torque pair (the same
+ *    impulse to both bodies, opposite signs). In HOLD mode Rapier spherical-joint angular
  *    velocity motors. Joint motor impulses are applied by the constraint solver to both bodies
  *    as an exact equal-and-opposite pair, and are clamped to a maximum torque. The motors are
  *    solved implicitly, which is what makes a 20 kN·m actuator stable between a 90 kg warrior
@@ -93,11 +94,70 @@ export class SwordActuator {
 
   /** 0..1 strength multiplier chosen by the controller (relaxed grip while toppled). */
   strength = 1;
+  /** The blade is touching something (set by the player each substep). */
+  resting = false;
   /** rad/s at which an idle grip returns the sword to its rest pose (0 = just hold). */
   restRate = 0;
 
+  /** 'hold': joint motors hold/drive the relative pose. 'free': an explicit torque pair. */
+  mode: 'hold' | 'free' = 'hold';
+  /** Torque the free-mode actuator applied this substep (world, on the sword). */
+  readonly freeTorque = new THREE.Vector3();
+
+  /**
+   * FREE mode: the player's effort is a torque (world, N·m) applied to the sword and, equal and
+   * opposite, to the body. Two more internal terms:
+   *  - weight support: the arms carry the sword's weight about the grip, so it floats instead of
+   *    flopping to the floor. The body still feels that torque, so holding the sword out tips you.
+   *  - light damping of the relative rotation, so a released swing follows through and coasts.
+   * The effort fades out as the relative swing speed approaches swordMaxRate (arms can only move
+   * so fast). Everything is clamped to swordMaxTorque · strength.
+   */
+  applyFree(b: ActuatedBodies, effort: THREE.Vector3, gripWorld: THREE.Vector3, dt: number): void {
+    const tun = this.tun;
+    if (this.mode !== 'free' || this.lastMax !== 0) {
+      setupAngularMotors(b.gripJoint, [0, 0, 0]);
+      setMotorVelocity(b.gripJoint, ta.set(0, 0, 0), 0);
+      this.lastMax = 0;
+      this.mode = 'free';
+    }
+    const s = b.sword;
+    const wRel = v3(s.angvel(), new THREE.Vector3()).sub(v3(b.torso.angvel(), tb));
+    const tau = this.freeTorque.set(0, 0, 0);
+    // effort, fading out toward the speed cap along its own axis
+    const e = effort.length();
+    if (e > 1e-6) {
+      const axis = tc.copy(effort).divideScalar(e);
+      const speed = wRel.dot(axis);
+      const fade = THREE.MathUtils.clamp(1 - speed / tun.swordMaxRate, 0, 1);
+      tau.addScaledVector(effort, fade);
+    }
+    // weight support about the grip (only while he has a proper grip on it). Pushing the blade
+    // down relaxes it, so gravity and the swing add up instead of fighting each other.
+    if (this.strength > 0.5 && !tun.cheatWeightlessSword) {
+      const r = v3(s.worldCom(), new THREE.Vector3()).sub(gripWorld);
+      const support = r.cross(tc.set(0, s.mass() * 9.81, 0));
+      const sl = support.length();
+      const down = sl > 1e-6 && e > 1e-6 ? Math.max(0, -effort.dot(support) / (sl * e)) : 0;
+      // while the blade rests on something, that thing carries part of the weight
+      tau.addScaledVector(support, (1 - down * Math.min(1, e / 3000)) * (this.resting ? 0.3 : 1));
+    }
+    tau.addScaledVector(wRel, -tun.swordFreeDamping);
+    const max = tun.swordMaxTorque * this.strength;
+    if (tau.length() > max) tau.setLength(max);
+    withForceAuthority(() => {
+      s.applyTorqueImpulse({ x: tau.x * dt, y: tau.y * dt, z: tau.z * dt }, true);
+      b.torso.applyTorqueImpulse({ x: -tau.x * dt, y: -tau.y * dt, z: -tau.z * dt }, true);
+    });
+    // keep the hold target where the sword is, so GRIP grabs it in place
+    q4(b.torso.rotation(), tq);
+    q4(b.sword.rotation(), tqs);
+    this.qTarget.copy(tq).invert().multiply(tqs);
+  }
+
   apply(b: ActuatedBodies, cmdWorld: THREE.Vector3, dt: number): void {
     const tun = this.tun;
+    this.mode = 'hold';
     const max = tun.swordMaxTorque * this.strength;
     if (this.lastMax !== max) {
       const m = max;

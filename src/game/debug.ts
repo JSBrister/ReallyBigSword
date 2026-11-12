@@ -20,7 +20,8 @@ export class DebugOverlay {
   private panel: HTMLDivElement;
   private gui: GUI;
 
-  constructor(scene: THREE.Scene, private tun: Tunables, onRebuild: () => void) {
+  constructor(scene: THREE.Scene, private tun: Tunables, onRebuild: () => void,
+    controls?: { stickMode: 'sword' | 'camera'; dragFullSpeed: number }) {
     const mat = (c: number) => new THREE.MeshBasicMaterial({ color: c, depthTest: false, transparent: true, opacity: 0.9 });
     this.com = new THREE.Mesh(new THREE.SphereGeometry(0.07, 12, 8), mat(0xff3050));
     this.comShadow = new THREE.Mesh(new THREE.RingGeometry(0.05, 0.09, 20).rotateX(-Math.PI / 2), mat(0xff3050));
@@ -71,6 +72,19 @@ export class DebugOverlay {
     feet.add(tun, 'restickSpeed', 0.01, 0.5, 0.01).name('re-stick speed');
     feet.add(tun, 'restickTime', 0, 0.3, 0.01).name('re-stick time');
     feet.close();
+    const ctl = g.addFolder('Controls & assists');
+    ctl.add(tun, 'swordEffort', 200, 20000, 100).name('full swing effort N·m');
+    ctl.add(tun, 'swordFreeDamping', 0, 3000, 10).name('follow-through damping');
+    ctl.add(tun, 'braceAmount', 0, 1, 0.05).name('bracing amount');
+    ctl.add(tun, 'braceCrouch', 0, 0.3, 0.01).name('brace: crouch m');
+    ctl.add(tun, 'braceWiden', 0, 0.3, 0.01).name('brace: widen stance m');
+    ctl.add(tun, 'braceStagger', 0, 0.4, 0.01).name('brace: split stance m');
+    ctl.add(tun, 'balanceReflex').name('balance reflex (ease off when tipping)');
+    ctl.add(tun, 'governor').name('balance governor (assist)');
+    if (controls) {
+      ctl.add(controls, 'stickMode', ['sword', 'camera']).name('gamepad right stick');
+      ctl.add(controls, 'dragFullSpeed', 100, 3000, 10).name('mouse: px/s for full swing');
+    }
     const act = g.addFolder('Actuators');
     act.add(tun, 'swordMaxTorque', 1000, 60000, 100).name('sword max torque N·m');
     act.add(tun, 'swordMaxRate', 1, 30, 0.5).name('swing rate cap rad/s');
@@ -109,8 +123,16 @@ export class DebugOverlay {
     if (this.visible) this.gui.show(); else this.gui.hide();
   }
 
+  /** Show the text readout even without F1 (the training ground does this). */
+  forcePanel = false;
+
   update(player: Player, groundY = 0): void {
-    if (!this.visible) return;
+    if (!this.visible) {
+      this.panel.style.display = this.forcePanel ? 'block' : 'none';
+      if (this.forcePanel) this.updatePanel(player);
+      return;
+    }
+    this.panel.style.display = 'block';
     const s = player.state;
     this.com.position.copy(s.com);
     this.comShadow.position.set(s.com.x, groundY + 0.01, s.com.z);
@@ -139,6 +161,11 @@ export class DebugOverlay {
       this.swordTorque.visible = true;
     } else this.swordTorque.visible = false;
 
+    this.updatePanel(player);
+  }
+
+  private updatePanel(player: Player): void {
+    const s = player.state;
     const feetLines = player.feet.feet.map((f) => {
       const side = f.side < 0 ? 'L' : 'R';
       const N = f.points.reduce((a, p) => a + p.N, 0);

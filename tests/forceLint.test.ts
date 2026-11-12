@@ -65,7 +65,7 @@ describe('force-source lint', () => {
   it('runtime guard: a full simulated second of play never trips the guard', async () => {
     const { player, run, cmd } = await makeSandbox();
     cmd.move.set(0, 0, 1);
-    cmd.swingYaw = 6;
+    cmd.effort.set(1, 0);
     expect(() => run(1)).not.toThrow();
     expect(player.bodies.length).toBe(2);
   });

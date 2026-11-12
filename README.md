@@ -14,17 +14,29 @@ npm install
 npm run dev
 ```
 
-| Input | Action |
-|---|---|
-| WASD | walk (camera relative); while walking, your legs also try to turn you toward the camera direction |
-| Hold LMB + drag | swing the sword in the drag direction; drag speed = target swing speed; holding still holds the pose |
-| Arrow keys | the same swings from the keyboard |
-| Mouse wheel | pull the sword in / push it out (reach) |
-| Space | jump (feet on the ground only, no air control) |
-| RMB drag | orbit the camera |
-| R / Esc / F1 / M | restart room / pause + controls / debug overlay + tunables / mute |
+| | Keyboard / mouse | Gamepad (standard mapping) |
+|---|---|---|
+| Walk | WASD (camera relative; you also turn toward the camera while walking) | left stick |
+| Swing | arrows or IJKL · or hold LMB + drag | face buttons (Y up, A down, X left, B right) · or right stick |
+| Grip (hold still) | Shift | RT |
+| Named attacks | 1 slam · 2 sweep left · 3 sweep right · 4 spin (hold) | LT + Y / X / B / A |
+| Reach | Q / E or mouse wheel | D-pad up / down |
+| Jump | Space | RB |
+| Camera | RMB drag | D-pad left / right (or the right stick; set in F1 → Controls) |
+| Menu | R restart room · Esc pause · F1 debug + tunables · M mute | Back restart · Start pause · L3 debug |
 
-Tips: a hard horizontal swing mostly spins *you*. Overhead slams rock you back hard. Build up a spin over several seconds like a hammer thrower, or swing slowly and let gravity help. Holding the sword straight out will tip you over.
+**How swinging works.**
+- A swing input applies a *torque* in that direction, up to `swordEffort` (2 kN·m), to the sword and, equal and opposite, to you. It does not set a target pose.
+- Let go and the blade keeps going on its own momentum until it slows to a stop or hits something. Then you settle your grip and carry it there. Grip stops it immediately.
+- Every swing braces your legs: a slight crouch, a wider stance and stiffer hips. A balance reflex eases off the swing if you start to go over.
+- Named attacks are short scripted sequences. The slam is raise → brace and wait for both feet → strike → plant. The sweeps are level the blade → brace → sweep → follow through. The spin is level the blade → keep pushing while held → follow through.
+
+You start in the **Training Ground**: a big open room with dummies that never move or fight back, and stand back up a few seconds after being knocked down. It has a row of left, right and top shielded dummies, a stone pillar, an oil patch and signposts, and shows a physics readout in the corner. The door north leads to the real goblins.
+
+Tips:
+- Slams work best close in (about 1.4 m), standing still and lined up: as the blade goes forward you get pushed back about a metre.
+- Big horizontal swings mostly spin *you*.
+- Holding the sword straight out will tip you over.
 
 ## The one rule
 
@@ -47,7 +59,7 @@ The "physics cheats" in the F1 panel (Sticky Feet, Infinite Friction, Weightless
 npm test
 ```
 
-There are 36 tests, all passing:
+The suites cover the following (all passing):
 
 1. **Airborne angular momentum** about the system COM, while swinging hard, is constant to under 1% of the moving momentum.
 2. **Airborne COM** follows the gravity parabola to within 1.5 mm.
@@ -78,6 +90,15 @@ There are also walking and jumping checks.
 - **Leg drive.** Planted feet sweep backwards at "hip velocity + bounded acceleration". When standing, they hold position. An integrated sweep velocity that ignored what the hips were doing made the feet skate.
 - **Reach** slides the grip anchor along the body's forward axis at a limited speed. The joint constraint supplies the (internal, equal-and-opposite) forces, so reach isn't strength-limited.
 - **Turning:** while walking, the stance legs twist the hips toward the camera direction through foot friction (friction-limited).
+- **Free-swing actuator.** With no grip, the sword actuator is an explicit equal-and-opposite torque pair: your effort, plus support for the sword's weight about the grip, plus light damping. Weight support relaxes while you push the blade down, so gravity helps a slam. It also relaxes while the blade rests on something. The weight support still reacts on your body, so holding the sword out still tips you. Grip, and carrying after a swing has settled, use the joint motors as before.
+- **Bracing** is real physics with a little tolerance:
+  - the hips drop up to `braceCrouch` (0.14 m);
+  - the stance widens by up to `braceWiden` (0.1 m);
+  - the hip strength cap doubles;
+  - the **balance reflex** fades swing effort out between about 17° and 40° of body tilt (it only ever weakens the internal actuator).
+  - A split stance along the blade (`braceStagger`) is implemented but defaults to 0, because the extra steps it triggers made slams *worse* in tests.
+- **Balance governor (optional, off by default).** Scales swing effort down to 25% while the feet can't deliver the balance torque they're asked for, or while you're tilting. In tests it prevents slam falls but roughly halves slam speed, which puts hits below the damage threshold.
+- **Damage threshold default is 6.5 m/s** (the brief said ~8, tunable). An honest slam that doesn't topple you lands at 7–7.5 m/s.
 - **Getting up (explicit rule, not a force).** After a topple, the legs plant under the hips and the hip torque tries to bring the torso up; the sword grip goes limp meanwhile. This usually works, but with the sword lying on the floor it sometimes stalls kneeling. **If he is still down after `standUpDelay` (2.5 s), he is placed back on his feet where he lies**, with an on-screen "Heave!". This is a visible teleport-style game rule, chosen over a hidden righting force.
 - **Rapier conserves angular momentum** for these bodies, so no integrator correction is applied (an early check suggesting otherwise was wrong).
 - **Goblins cheat as specified.** They set their own velocity and heading, and lunge as a one-off launch, so the knockback is just a 35 kg goblin's momentum. Hits above the threshold make them free rigid bodies. Shields are separate kinematic bodies glued to the goblin each step, so blocked swords genuinely bounce off and the warrior recoils.
@@ -92,6 +113,8 @@ There are also walking and jumping checks.
 - Dungeon: a 14 m hall, a corridor narrower than the sword, a low vault with a 2.75 m ceiling, and a cellar with an oil slick. Doors open when a room is cleared; respawn at the room start; R restarts the room.
 
 ## What feels wrong / open problems
+
+**Update (controls rework):** with effort-based controls at 2 kN·m, the balance reflex, and bracing without the split stance, a standing slam on a target about 1.4 m away lands at 7–7.5 m/s and he stays up. A slam that misses and hits the floor, a sweep, or a long spin still usually topples him. The automatic stand-up then puts him back on his feet. The original analysis below still describes why.
 
 **Overhead slams usually topple the warrior.** A vertical swing transfers most of the relative rotation to the body: torso pitch inertia is ~24 kg·m² against ~400 kg·m² for the sword about the grip. The ground can return only about weight × half a foot ≈ 350 N·m. In headless bot playtests of room 1, slams at 5–14 rad/s knocked him over about half the time, and few hits cleared the 8 m/s threshold. This is the joke working, but it makes the early rooms very hard.
 

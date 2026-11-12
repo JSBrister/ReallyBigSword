@@ -76,10 +76,10 @@ describe('sword damage', () => {
     expect(r.g.hp).toBe(r.g.maxHp);
   });
 
-  it('a real overhead slam from the warrior hurts a goblin (a flat spin mostly turns him instead)', async () => {
+  it('a real overhead slam from the warrior hurts a goblin, and so does the named slam', async () => {
     const sb = await makeSandbox();
     const gm = new GoblinManager(sb.pw, sb.tun);
-    const g = gm.spawn(new THREE.Vector3(0, 0, 1.6), 'none', Math.PI); // close: he rocks back as he swings
+    const g = gm.spawn(new THREE.Vector3(0, 0, 1.4), 'none', Math.PI); // close: he is pushed back as the blade goes forward
     const det = new ImpactDetector(sb.pw, () => sb.player.sword, () => [sb.player.swordBlade]);
     det.track(g.body);
     let dmg = 0, best = 0;
@@ -88,9 +88,25 @@ describe('sword damage', () => {
       for (const h of gm.applyImpacts(det.impacts)) { dmg += h.damage; best = Math.max(best, h.impact.normalSpeed); }
     } });
     sb.run(0.3);
-    sb.cmd.swingPitch = -14; // bring the upright sword down hard onto the goblin in front
-    sb.run(1.0);
+    // full downward effort until the blade is low, then let it follow through
+    sb.run(1.0, () => { sb.cmd.effort.set(0, sb.player.swordTip.y > 0.45 ? -1 : 0); });
     console.log(`overhead slam: impact ${best.toFixed(1)} m/s, goblin damage ${dmg}, state ${g.state}`);
     expect(dmg).toBeGreaterThan(0);
+
+    // the scripted slam (raise, brace, strike) does it too
+    const sb2 = await makeSandbox();
+    const gm2 = new GoblinManager(sb2.pw, sb2.tun);
+    const g2 = gm2.spawn(new THREE.Vector3(0, 0, 1.4), 'none', Math.PI);
+    const det2 = new ImpactDetector(sb2.pw, () => sb2.player.sword, () => [sb2.player.swordBlade]);
+    det2.track(g2.body);
+    let dmg2 = 0;
+    sb2.pw.hooks.push({ pre: (dt) => { gm2.pre(dt, new THREE.Vector3(0, 0, -50), () => false); det2.pre(); }, post: () => {
+      det2.post(); for (const h of gm2.applyImpacts(det2.impacts)) dmg2 += h.damage;
+    } });
+    sb2.run(0.3);
+    sb2.cmd.attack = 'slam';
+    sb2.run(2.0);
+    console.log(`named slam: goblin damage ${dmg2}, warrior fallen ${sb2.player.fallen}`);
+    expect(dmg2).toBeGreaterThan(0);
   });
 });

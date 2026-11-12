@@ -27,7 +27,8 @@ export class GoblinView {
 
   constructor(readonly goblin: Goblin) {
     const r = this.root;
-    const body = skin.clone();
+    // training dummies are straw-coloured with a target painted on them
+    const body = goblin.dummy ? new THREE.MeshStandardMaterial({ color: 0xc9b06c, roughness: 0.9 }) : skin.clone();
     this.mats.push(body);
     r.add(m(new THREE.CapsuleGeometry(0.26, 0.3, 4, 10), rag, [0, -0.05, 0]));
     r.add(m(new THREE.SphereGeometry(0.2, 12, 10), body, [0, 0.12, 0.03]));
@@ -40,6 +41,11 @@ export class GoblinView {
       r.add(m(new THREE.CapsuleGeometry(0.06, 0.25, 4, 6), skinDark, [s * 0.12, -0.48, 0.02]));
     }
     r.add(m(new THREE.ConeGeometry(0.05, 0.16, 6), skinDark, [0, 0.6, 0.27], [Math.PI / 2, 0, 0]));
+    if (goblin.dummy) {
+      for (const [rad, col] of [[0.2, 0xffffff], [0.14, 0xd02020], [0.08, 0xffffff], [0.035, 0xd02020]] as const) {
+        r.add(m(new THREE.CircleGeometry(rad, 20), new THREE.MeshBasicMaterial({ color: col }), [0, 0.0, 0.285 + (0.2 - rad) * 0.01]));
+      }
+    }
     // weapon arm (right hand), crude club
     this.arm = new THREE.Group();
     this.arm.position.set(-0.28, 0.2, 0.05);

@@ -26,7 +26,7 @@ describe('balance, toppling and spinning', () => {
   it('a sustained hard horizontal swing on stone slips the feet and spins the body the other way', async () => {
     const { player, run, cmd, pw } = await makeSandbox({}, { swordDir: new THREE.Vector3(0, 0, 1) });
     let slipTime = 0, bodyYawRate = 0, swordYawRate = 0, n = 0;
-    cmd.swingYaw = 8; // counter-clockwise seen from above
+    cmd.effort.set(-1, 0); // full effort counter-clockwise seen from above (left)
     run(0.8, (t) => {
       if (player.feet.feet.some((f) => f.slipping)) slipTime += pw.substepDt;
       if (t > 0.1 && t < 0.5) { bodyYawRate += player.body.angvel().y; swordYawRate += player.sword.angvel().y; n++; }
@@ -37,7 +37,7 @@ describe('balance, toppling and spinning', () => {
     expect(bodyYawRate).toBeLessThan(-1); // body spins clockwise, opposite the swing
     // the swing itself happened (relative rotation); in the world the warrior mostly orbits the
     // heavier sword, so the sword's own yaw rate is small
-    expect(swordYawRate - bodyYawRate).toBeGreaterThan(5);
+    expect(swordYawRate - bodyYawRate).toBeGreaterThan(1);
   });
 });
 

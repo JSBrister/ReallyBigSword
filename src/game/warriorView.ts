@@ -60,14 +60,19 @@ export function twoBoneIK(root: THREE.Vector3, target: THREE.Vector3, l1: number
 export function buildSword(length: number): THREE.Group {
   const g = new THREE.Group();
   const bladeLen = length - GEOM.pommel - GEOM.bladeStart;
-  const blade = mesh(new THREE.BoxGeometry(GEOM.bladeWidth, bladeLen, GEOM.bladeThickness), MAT.steel,
-    [0, GEOM.bladeStart + bladeLen / 2, 0]);
-  // a blunt-ish tip: a flattened pyramid
-  const tip = mesh(new THREE.ConeGeometry(GEOM.bladeWidth / 2 * 1.41, 0.32, 4, 1), MAT.steel,
-    [0, GEOM.bladeStart + bladeLen + 0.16 - 0.001, 0], [0, Math.PI / 4, 0]);
-  tip.scale.set(1, 1, GEOM.bladeThickness / GEOM.bladeWidth);
-  blade.scale.y = 1 - 0.32 / bladeLen;
-  blade.position.y -= 0.16;
+  // blade body plus a pointed tip, both in the blade plane (width along X, thickness along Z)
+  const tipLen = 0.36;
+  const bodyLen = bladeLen - tipLen;
+  const blade = mesh(new THREE.BoxGeometry(GEOM.bladeWidth, bodyLen, GEOM.bladeThickness), MAT.steel,
+    [0, GEOM.bladeStart + bodyLen / 2, 0]);
+  const tipShape = new THREE.Shape();
+  tipShape.moveTo(-GEOM.bladeWidth / 2, 0);
+  tipShape.lineTo(GEOM.bladeWidth / 2, 0);
+  tipShape.lineTo(0, tipLen);
+  tipShape.closePath();
+  const tipGeo = new THREE.ExtrudeGeometry(tipShape, { depth: GEOM.bladeThickness, bevelEnabled: false });
+  tipGeo.translate(0, 0, -GEOM.bladeThickness / 2);
+  const tip = mesh(tipGeo, MAT.steel, [0, GEOM.bladeStart + bodyLen, 0]);
   const fuller = mesh(new THREE.BoxGeometry(0.05, bladeLen * 0.8, GEOM.bladeThickness * 1.06), MAT.steelDark,
     [0, GEOM.bladeStart + bladeLen * 0.42, 0]);
   const guard = mesh(new THREE.BoxGeometry(0.72, 0.1, 0.12), MAT.steelDark, [0, GEOM.bladeStart - 0.05, 0]);

@@ -53,7 +53,14 @@ export class Goblin {
   sinceTouched = 99;
   flash = 0;
 
+  /** Training dummy: never moves or attacks, stands back up at home after being knocked down. */
+  dummy = false;
+  readonly home = new THREE.Vector3();
+  homeYaw = 0;
+
   constructor(private pw: PhysicsWorld, readonly id: number, pos: THREE.Vector3, readonly shield: ShieldSide, yaw = 0) {
+    this.home.copy(pos);
+    this.homeYaw = yaw;
     const R = pw.R, world = pw.world;
     this.maxHp = this.hp = shield === 'none' ? GOBLIN.hpPlain : GOBLIN.hpShielded;
     this.yaw = yaw;
@@ -102,6 +109,25 @@ export class Goblin {
     else { this.shieldBody.setNextKinematicTranslation(p); this.shieldBody.setNextKinematicRotation(q); }
   }
 
+  /** Dummy reset: back home, upright, full health, shield re-attached. */
+  resetHome(): void {
+    const b = this.body;
+    this.yaw = this.homeYaw;
+    b.setTranslation({ x: this.home.x, y: this.home.y + GOBLIN.originHeight + 0.02, z: this.home.z }, true);
+    b.setRotation(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw), true);
+    b.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    b.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    b.setEnabledRotations(false, false, false, true);
+    this.hp = this.maxHp;
+    this.state = 'idle';
+    this.downTime = 0; this.deadTime = 0;
+    if (this.shieldBody && !this.shieldBody.isKinematic()) {
+      this.shieldBody.setBodyType(this.pw.R.RigidBodyType.KinematicPositionBased, true);
+      this.shieldCollider!.setCollisionGroups(groups(GROUP.SHIELD, GROUP.SWORD | GROUP.PLAYER | GROUP.DEBRIS));
+    }
+    this.syncShield(0);
+  }
+
   /** Knocked loose: the shield becomes a free dynamic piece of debris. */
   dropShield(): void {
     if (!this.shieldBody) return;
@@ -134,8 +160,9 @@ export class GoblinManager {
 
   constructor(private pw: PhysicsWorld, private tun: Tunables) {}
 
-  spawn(pos: THREE.Vector3, shield: ShieldSide = 'none', yaw = 0): Goblin {
+  spawn(pos: THREE.Vector3, shield: ShieldSide = 'none', yaw = 0, dummy = false): Goblin {
     const g = new Goblin(this.pw, this.nextId++, pos, shield, yaw);
+    g.dummy = dummy;
     this.goblins.push(g);
     return g;
   }
@@ -190,7 +217,7 @@ export class GoblinManager {
     g.state = dead ? 'dead' : 'ragdoll';
     g.downTime = 0;
     g.body.setEnabledRotations(true, true, true, true);
-    if (dead) g.dropShield();
+    if (dead && !g.dummy) g.dropShield();
   }
 
   /** AI + cheating locomotion, before the physics step. */
@@ -201,6 +228,12 @@ export class GoblinManager {
       const p = g.position;
       const toP = new THREE.Vector3(playerPos.x - p.x, 0, playerPos.z - p.z);
       const dist = toP.length();
+      if (g.dummy && (g.state === 'ragdoll' || g.state === 'dead')) {
+        g.downTime += dt;
+        if (g.shieldBody) g.syncShield(dt);
+        if (g.downTime > 3.5) g.resetHome();
+        continue;
+      }
       if (g.state === 'dead') { g.deadTime += dt; continue; }
       if (g.state === 'ragdoll') {
         g.downTime += dt;
@@ -209,8 +242,9 @@ export class GoblinManager {
         if (g.downTime > 2.2 && Math.hypot(v.x, v.y, v.z) < 0.6) this.standUp(g);
         continue;
       }
-      // turn toward the player (shielded goblins only slowly)
-      if (active(g) && dist > 0.05) {
+      const isActive = !g.dummy && active(g);
+      // turn toward the player (shielded goblins only slowly); shielded dummies turn too
+      if ((isActive || (g.dummy && g.shield !== 'none' && dist < 9)) && dist > 0.05) {
         const want = Math.atan2(toP.x, toP.z);
         let d = want - g.yaw;
         while (d > Math.PI) d -= 2 * Math.PI;
@@ -223,10 +257,10 @@ export class GoblinManager {
       g.timer -= dt;
       switch (g.state) {
         case 'idle':
-          if (active(g)) g.state = 'chase';
+          if (isActive) g.state = 'chase';
           break;
         case 'chase':
-          if (!active(g)) { g.state = 'idle'; break; }
+          if (!isActive) { g.state = 'idle'; break; }
           if (dist < GOBLIN.attackRange) { g.state = 'windup'; g.timer = GOBLIN.windup; g.hitPlayerThisAttack = false; break; }
           vx = toP.x / dist * GOBLIN.speed; vz = toP.z / dist * GOBLIN.speed;
           break;
@@ -248,7 +282,7 @@ export class GoblinManager {
           if (g.timer <= 0) g.state = 'chase';
           break;
         case 'stagger':
-          if (g.timer <= 0) g.state = 'chase';
+          if (g.timer <= 0) g.state = g.dummy ? 'idle' : 'chase';
           break;
       }
       if (g.state === 'lunge') {
@@ -276,7 +310,7 @@ export class GoblinManager {
 
   /** Remove dead goblins that have lain around long enough. */
   cleanup(maxDeadTime = 8): Goblin[] {
-    const gone = this.goblins.filter((g) => g.state === 'dead' && g.deadTime > maxDeadTime);
+    const gone = this.goblins.filter((g) => !g.dummy && g.state === 'dead' && g.deadTime > maxDeadTime);
     for (const g of gone) this.remove(g);
     return gone;
   }

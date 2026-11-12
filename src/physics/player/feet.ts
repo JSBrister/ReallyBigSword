@@ -109,6 +109,10 @@ export class FootSystem {
   readonly feet: [Foot, Foot] = [new Foot(-1), new Foot(1)];
   /** World horizontal velocity the stance legs sweep the body at (leg drive). */
   readonly driveVel = new THREE.Vector3();
+  /** Multiplier on hipMaxTorque (bracing). */
+  hipStrengthScale = 1;
+  /** How much requested hip torque the feet could not deliver this substep (N·m). */
+  torqueDeficit = 0;
   /** Yaw rate (rad/s) the planted legs twist the hips at (turning in place; friction limited). */
   twistRate = 0;
   /** Extra leg length (m) commanded by the controller, e.g. jump extension. */
@@ -188,6 +192,7 @@ export class FootSystem {
     this.slipEvents.length = 0;
     this.totalN = 0;
     this.hipTorque.set(0, 0, 0);
+    this.torqueDeficit = 0;
     this.applyLegs(dt);
   }
 
@@ -242,7 +247,9 @@ export class FootSystem {
         cp.muS = mat.muS; cp.muK = mat.muK;
         if (tun.cheatInfiniteFriction || tun.cheatStickyFeet) { cp.muS = 1e9; cp.muK = 1e9; }
         if (cp.state === 'air') {
-          cp.state = 'stick';
+          // a planted foot that bounced and comes back down while moving is sliding, not sticking
+          // (a stepping foot is placed by the leg, so it lands sticking)
+          cp.state = foot.phase === 'stance' && Math.hypot(cp.vel.x, cp.vel.z) > tun.restickSpeed ? 'slip' : 'stick';
           cp.anchor.set(cp.world.x, g.y, cp.world.z);
           cp.slowTime = 0;
         }
@@ -418,12 +425,14 @@ export class FootSystem {
     const want = { x: hip.x + m.z / Ntot, z: hip.z - m.x / Ntot };
     const poly = convexHullXZ(stance.map((cp) => ({ x: cp.anchor.x, z: cp.anchor.z })));
     const copXZ = clampToPolygon(want, poly);
+    this.torqueDeficit = Math.hypot(want.x - copXZ.x, want.z - copXZ.z) * Ntot;
     this.cop.set(copXZ.x, groundY, copXZ.z);
     const d = new THREE.Vector3(copXZ.x - hip.x, 0, copXZ.z - hip.z);
     const M = new THREE.Vector3(-d.z * Ntot, 0, d.x * Ntot).add(new THREE.Vector3(-Ft.z, 0, Ft.x).multiplyScalar(L));
     // the hips can only carry so much: never pass on more tilting torque than their strength
     const hm = M.length();
-    if (hm > tun.hipMaxTorque) M.multiplyScalar(tun.hipMaxTorque / hm);
+    const hipMax = tun.hipMaxTorque * this.hipStrengthScale;
+    if (hm > hipMax) M.multiplyScalar(hipMax / hm);
     this.hipTorque.copy(M);
     M.y += Myaw;
 

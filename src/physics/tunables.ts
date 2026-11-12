@@ -26,6 +26,8 @@ export interface Tunables {
   swordMotorFactor: number; // N·m·s/rad, joint motor velocity gain (solved implicitly)
   swordMaxLead: number; // rad, how far the commanded pose may run ahead of the real pose
   swordMaxRate: number; // rad/s, cap on commanded relative angular velocity
+  swordEffort: number; // N·m, torque of a full-strength swing input
+  swordFreeDamping: number; // N·m·s/rad, internal damping of the relative swing when not gripping
   reachSpeed: number; // m/s grip slide speed
 
   // --- locomotion ---
@@ -53,6 +55,14 @@ export interface Tunables {
   substeps: number; // per 1/60 s frame
 
   // --- physics cheats (all off by default; they exist to demonstrate the joke) ---
+  /** Optional assist: scale swing effort down while the feet cannot hold the reaction. */
+  governor: boolean;
+  /** Brace strength: how much crouch / stance change / hip stiffening bracing applies (0..1). */
+  braceAmount: number;
+  braceCrouch: number; // m the hips drop when fully braced
+  braceStagger: number; // m each foot moves along the blade for a pitch swing
+  braceWiden: number; // m extra stance half-width when braced
+  balanceReflex: boolean; // ease off a swing as he starts to go over
   cheatStickyFeet: boolean;
   cheatInfiniteFriction: boolean;
   cheatWeightlessSword: boolean;
@@ -80,6 +90,8 @@ export const defaultTunables: Tunables = {
   swordMotorFactor: 60000,
   swordMaxLead: 0.6,
   swordMaxRate: 10,
+  swordEffort: 2000,
+  swordFreeDamping: 250,
   reachSpeed: 1.6,
 
   walkSpeed: 1.6,
@@ -97,12 +109,18 @@ export const defaultTunables: Tunables = {
   jumpForce: 14000,
   jumpPushTime: 0.16,
 
-  damageThreshold: 8,
+  damageThreshold: 6.5,
   damagePerMps: 6,
 
   timeScale: 1,
   substeps: 8,
 
+  governor: false,
+  braceAmount: 1,
+  braceCrouch: 0.14,
+  braceStagger: 0,
+  braceWiden: 0.1,
+  balanceReflex: true,
   cheatStickyFeet: false,
   cheatInfiniteFriction: false,
   cheatWeightlessSword: false,

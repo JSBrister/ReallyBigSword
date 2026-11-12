@@ -11,15 +11,46 @@ export interface RoomDef {
   ceiling: number;
   spawn: THREE.Vector3;
   spawnHeading: number;
-  goblins: { pos: THREE.Vector3; shield: ShieldSide }[];
+  goblins: { pos: THREE.Vector3; shield: ShieldSide; dummy?: boolean; yaw?: number }[];
   /** Door in the north wall that opens when this room is cleared. */
   exit?: { x0: number; x1: number; z: number };
   slick?: Rect[];
+  /** Practice room: dummies only, door open from the start. */
+  training?: boolean;
+  pillars?: { x: number; z: number; half: number; height: number }[];
+  signs?: { x: number; z: number; text: string; facing?: number }[];
 }
 
 const W = 0.5; // wall thickness
 
 export const ROOMS: RoomDef[] = [
+  {
+    name: 'The Training Ground', training: true,
+    hint: 'Dummies don\'t move or fight back, and they stand back up. Try things. F1 shows the physics. The door north leads to real goblins.',
+    rect: { x0: -15, x1: 15, z0: -34, z1: 0 }, ceiling: 9, spawn: new THREE.Vector3(0, 0, -30), spawnHeading: 0,
+    goblins: [
+      // plain dummies: something to hit
+      { pos: new THREE.Vector3(-9, 0, -26), shield: 'none', dummy: true, yaw: Math.PI / 2 },
+      { pos: new THREE.Vector3(-9, 0, -22), shield: 'none', dummy: true, yaw: Math.PI / 2 },
+      // the shield row: walk up to each and see which swings get through
+      { pos: new THREE.Vector3(-6, 0, -9), shield: 'left', dummy: true, yaw: Math.PI },
+      { pos: new THREE.Vector3(-2, 0, -9), shield: 'right', dummy: true, yaw: Math.PI },
+      { pos: new THREE.Vector3(2, 0, -9), shield: 'top', dummy: true, yaw: Math.PI },
+      { pos: new THREE.Vector3(6, 0, -9), shield: 'none', dummy: true, yaw: Math.PI },
+    ],
+    exit: { x0: -1.1, x1: 1.1, z: 0 },
+    slick: [{ x0: 6, x1: 13, z0: -26, z1: -16 }],
+    pillars: [{ x: -11, z: -14, half: 0.45, height: 3.2 }, { x: 11, z: -6, half: 0.45, height: 3.2 }],
+    signs: [
+      { x: 0, z: -27.5, text: 'Swing with the arrows / face buttons.\nLet go and the sword keeps going.\nHold GRIP to stop it.' },
+      { x: -6.5, z: -24, text: 'Dummies. Get close, then\n1 (or LT+Y) to slam.' },
+      { x: 3, z: -21, text: 'Open floor: hold a sideways\nswing and spin up momentum.' },
+      { x: 9.5, z: -14, text: 'Oil. Your feet only grip\nas well as friction allows.' },
+      { x: -11, z: -12, text: 'Stone pillar: sparks.' },
+      { x: 0, z: -11.5, text: 'Shield row: L, R, top, none.\nShields turn to face you.' },
+      { x: 0, z: -2.5, text: 'Real goblins beyond this door.' },
+    ],
+  },
   {
     name: 'The Training Hall', hint: 'Two goblins. Bring the blade down on them: horizontal swings mostly spin you.',
     rect: { x0: -7, x1: 7, z0: 0, z1: 14 }, ceiling: 7, spawn: new THREE.Vector3(0, 0, 2.5), spawnHeading: 0,
@@ -149,6 +180,10 @@ export class Level {
     ceil.position.set(cx, h, cz);
     this.group.add(ceil);
     this.pw.addStaticBox(new THREE.Vector3(cx, h + 0.25, cz), new THREE.Vector3(hx + W, 0.25, hz + W));
+    for (const pl of r.pillars ?? []) {
+      this.box(new THREE.Vector3(pl.x, pl.height / 2, pl.z), new THREE.Vector3(pl.half, pl.height / 2, pl.half), this.wallMat);
+    }
+    for (const sg of r.signs ?? []) this.group.add(makeSign(sg.text, sg.x, sg.z, sg.facing ?? Math.PI));
     // torches
     const light = new THREE.PointLight(0xffa860, 30, Math.max(hx, hz) * 2.6, 1.6);
     light.position.set(cx, Math.min(h - 0.3, 4), cz);
@@ -220,4 +255,29 @@ function subtract(a: Rect, b: Rect): Rect[] {
   if (b.x0 > a.x0) out.push({ x0: a.x0, x1: b.x0, z0: b.z0, z1: b.z1 });
   if (b.x1 < a.x1) out.push({ x0: b.x1, x1: a.x1, z0: b.z0, z1: b.z1 });
   return out;
+}
+
+/** A wooden signpost with chalk text, readable from the south (facing = PI looks toward -z). */
+function makeSign(text: string, x: number, z: number, facing: number): THREE.Group {
+  const g = new THREE.Group();
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 256;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#5a3d22'; ctx.fillRect(0, 0, 512, 256);
+  ctx.strokeStyle = '#3a2614'; ctx.lineWidth = 10; ctx.strokeRect(5, 5, 502, 246);
+  ctx.fillStyle = '#f2ead8';
+  ctx.font = 'bold 36px system-ui, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const lines = text.split('\n');
+  lines.forEach((ln, i) => ctx.fillText(ln, 256, 128 + (i - (lines.length - 1) / 2) * 46));
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const board = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 1.2), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9, side: THREE.DoubleSide }));
+  board.position.y = 1.7;
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.1), new THREE.MeshStandardMaterial({ color: 0x4a3018 }));
+  post.position.y = 0.55;
+  g.add(board, post);
+  g.position.set(x, 0, z);
+  g.rotation.y = facing;
+  return g;
 }

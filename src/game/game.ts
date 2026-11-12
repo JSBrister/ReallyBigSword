@@ -77,10 +77,12 @@ export class Game {
     this.goblins = new GoblinManager(this.pw, this.tun);
     this.goblins.onPlayerHit = (_g, dmg) => this.hurtPlayer(dmg);
     this.effects = new Effects(this.scene);
-    this.debug = new DebugOverlay(this.scene, this.tun, () => this.restartRoom());
+    this.debug = new DebugOverlay(this.scene, this.tun, () => this.restartRoom(), this.input);
 
     this.spawnPlayer(0);
-    ROOMS.forEach((r, i) => r.goblins.forEach((gd) => this.addGoblin(gd.pos, gd.shield, i)));
+    ROOMS.forEach((r, i) => r.goblins.forEach((gd) => this.addGoblin(gd.pos, gd.shield, i, gd.dummy, gd.yaw)));
+    // practice rooms are "cleared" from the start: their door is open
+    ROOMS.forEach((r, i) => { if (r.training) { this.cleared.add(i); this.level.openDoor(i); } });
     this.pw.hooks.push({
       pre: (dt) => {
         this.player.preStep(dt, this.cmd);
@@ -133,8 +135,8 @@ export class Game {
     this.cam.yaw = r.spawnHeading + Math.PI;
   }
 
-  private addGoblin(pos: THREE.Vector3, shield: Goblin['shield'], room: number): void {
-    const g = this.goblins.spawn(pos, shield, Math.PI);
+  private addGoblin(pos: THREE.Vector3, shield: Goblin['shield'], room: number, dummy = false, yaw = Math.PI): void {
+    const g = this.goblins.spawn(pos, shield, yaw, dummy);
     this.goblinRoom.set(g, room);
     const view = new GoblinView(g);
     view.attach(this.scene);
@@ -155,7 +157,9 @@ export class Game {
     for (const g of [...this.goblins.goblins]) {
       if (this.goblinRoom.get(g) === room) { this.removeGoblin(g); this.goblins.remove(g); }
     }
-    if (!this.cleared.has(room)) ROOMS[room].goblins.forEach((gd) => this.addGoblin(gd.pos, gd.shield, room));
+    if (!this.cleared.has(room) || ROOMS[room].training) {
+      ROOMS[room].goblins.forEach((gd) => this.addGoblin(gd.pos, gd.shield, room, gd.dummy, gd.yaw));
+    }
     this.spawnPlayer(room);
     this.deadTimer = 0;
     this.updateHud();
@@ -202,8 +206,8 @@ export class Game {
 
   private updateHud(): void {
     const r = ROOMS[this.currentRoom];
-    const left = this.goblins.goblins.filter((g) => this.goblinRoom.get(g) === this.currentRoom && g.alive).length;
-    this.hud.setRoom(r.name, r.hint, left);
+    const left = this.goblins.goblins.filter((g) => this.goblinRoom.get(g) === this.currentRoom && g.alive && !g.dummy).length;
+    this.hud.setRoom(r.name, r.hint, r.training ? -1 : left);
     this.hud.setHealth(this.player.health, this.player.maxHealth);
   }
 
@@ -247,9 +251,10 @@ export class Game {
     this.last = now;
     const orbit = this.input.takeOrbit();
     this.cam.orbit(orbit.x, orbit.y);
+    if (this.paused) this.input.pollPaused();
     if (!this.paused) {
       this.input.command(dt, this.cam.lookYaw, this.tun.reachSpeed, this.cmd);
-      if (this.player.health <= 0) { this.cmd.move.set(0, 0, 0); this.cmd.swingYaw = this.cmd.swingPitch = 0; }
+      if (this.player.health <= 0) { this.cmd.move.set(0, 0, 0); this.cmd.effort.set(0, 0); this.cmd.attack = null; }
       this.pw.advance(dt);
       this.gameLogic(dt);
       this.level.update(dt);
@@ -264,6 +269,7 @@ export class Game {
     this.cam.update(dt, pp, ceiling);
     this.sun.position.copy(pp).add(new THREE.Vector3(5, 12, 3));
     this.sun.target.position.copy(pp);
+    this.debug.forcePanel = !!ROOMS[Math.max(0, this.currentRoom)].training;
     this.debug.update(this.player);
     this.renderer.render(this.scene, this.camera);
   }

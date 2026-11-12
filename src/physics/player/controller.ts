@@ -37,6 +37,18 @@ export class GaitController {
   lastStepSide: -1 | 1 = 1;
   stepCount = 0;
   lastStepReason = '';
+  /** 0..1: braced for a swing (crouched, wider/staggered stance, stiffer hips). */
+  brace = 0;
+  /** Horizontal direction to stagger the feet along (pitch swings), or null for a wide stance. */
+  braceAxis: THREE.Vector3 | null = null;
+
+  setBrace(target: number, axis: THREE.Vector3 | null, dt: number): void {
+    const want = target * this.tun.braceAmount;
+    const rate = want > this.brace ? 6 : 2.5;
+    this.brace += THREE.MathUtils.clamp(want - this.brace, -rate * dt, rate * dt);
+    if (axis) this.braceAxis = (this.braceAxis ?? new THREE.Vector3()).copy(axis);
+    else if (target > 0.1) this.braceAxis = null;
+  }
   private retracting = false;
 
   constructor(private tun: Tunables, private feet: FootSystem) {}
@@ -72,6 +84,7 @@ export class GaitController {
       this.vDrive.set(hipVel.x, 0, hipVel.z).addScaledVector(acc, dt);
     }
     feet.driveVel.copy(this.vDrive);
+    feet.hipStrengthScale = 1 + this.brace;
 
     // --- turning: the stance legs twist the hips toward the wanted heading (friction limited) ---
     if (input.faceYaw !== null && !this.airborne && !feet.legsDisabled) {
@@ -111,7 +124,8 @@ export class GaitController {
       const ff = new THREE.Vector3().subVectors(sys.com, pelvisPos).cross(new THREE.Vector3(0, sys.mass * 9.81, 0));
       const tau = e.multiplyScalar(tun.hipStiffness).addScaledVector(wh, -tun.hipDamping).add(ff);
       tau.y = 0;
-      if (tau.length() > tun.hipMaxTorque) tau.setLength(tun.hipMaxTorque);
+      const hipMax = tun.hipMaxTorque * (1 + this.brace);
+      if (tau.length() > hipMax) tau.setLength(hipMax);
       feet.hipTorqueTarget.copy(tau);
     } else feet.hipTorqueTarget.set(0, 0, 0);
 
@@ -130,7 +144,7 @@ export class GaitController {
       feet.thrust = 0;
       // after take-off tuck the legs a little, then return to normal length
       if (this.retracting && this.airborne) this.setExtension(-0.12, 2.5, dt);
-      else { this.retracting = false; this.setExtension(0, 1.5, dt); }
+      else { this.retracting = false; this.setExtension(-tun.braceCrouch * this.brace, 0.4, dt); }
     }
 
     // legs usable again after being upside down: put the feet straight under the warrior
@@ -194,7 +208,9 @@ export class GaitController {
     void T;
     const right = new THREE.Vector3(-Math.cos(yaw), 0, Math.sin(yaw));
     const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
-    base.addScaledVector(right, f.side * GEOM.stanceHalfWidth);
+    base.addScaledVector(right, f.side * (GEOM.stanceHalfWidth + tun.braceWiden * this.brace));
+    // braced for a pitch swing: split stance along the blade (left foot forward, right back)
+    if (this.braceAxis && this.brace > 0.05) base.addScaledVector(this.braceAxis, -f.side * tun.braceStagger * this.brace);
     // the target is for the middle of the sole, the controller positions the ankle
     base.addScaledVector(fwd, -(GEOM.heel + GEOM.toe) / 2);
     // keep within leg reach of the hip
