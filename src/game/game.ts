@@ -6,6 +6,7 @@ import { Player, emptyCommand, type PlayerCommand } from '../physics/player/play
 import { v3, q4 } from '../physics/mathUtil';
 import { Input } from './input';
 import { FollowCamera } from './camera';
+import { Effects } from './particles';
 
 /** Milestone-1 sandbox: flat floor, placeholder warrior, live sword actuator. */
 export class Game {
@@ -21,6 +22,7 @@ export class Game {
   private meshes: { body: () => import('@dimforge/rapier3d-compat').RigidBody; mesh: THREE.Object3D }[] = [];
   private last = performance.now();
   paused = false;
+  effects!: Effects;
 
   constructor(private R: Rapier, container: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -36,6 +38,7 @@ export class Game {
     window.addEventListener('resize', () => this.resize());
     this.resize();
     this.buildScene();
+    this.effects = new Effects(this.scene);
     this.restart();
     requestAnimationFrame(() => this.frame());
   }
@@ -67,20 +70,23 @@ export class Game {
       this.pw = new PhysicsWorld(this.R, this.tun);
       this.pw.addStaticBox(new THREE.Vector3(0, -0.5, 0), new THREE.Vector3(50, 0.5, 50));
       this.player = new Player(this.pw, this.tun, { position: new THREE.Vector3(0, 0, 0) });
-      this.pw.hooks.push({ pre: (dt) => this.player.preStep(dt, this.cmd), post: (dt) => this.player.postStep(dt) });
+      this.pw.hooks.push({ pre: (dt) => this.player.preStep(dt, this.cmd), post: (dt) => {
+        this.player.postStep(dt);
+        for (const e of this.player.feet.slipEvents) this.effects.footSlip(e.pos, e.speed, e.N, dt, e.material === 'slick');
+      } });
     } else {
       this.player.respawn({ position: new THREE.Vector3(0, 0, 0) });
     }
     for (const m of this.meshes) this.scene.remove(m.mesh);
     this.meshes = [];
     const mat = (c: number) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.6 });
-    const pelvis = new THREE.Mesh(new THREE.CapsuleGeometry(0.18, 0.24), mat(0x3355aa));
-    pelvis.position.y = 0.15;
+    const pelvis = new THREE.Mesh(new THREE.CapsuleGeometry(0.17, 0.32), mat(0x3355aa));
+    pelvis.position.y = -0.2;
     const torso = new THREE.Group();
-    const tm = new THREE.Mesh(new THREE.CapsuleGeometry(0.21, 0.3), mat(0xaa3333));
-    tm.position.y = 0.04;
+    const tm = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.34), mat(0xaa3333));
+    tm.position.y = 0.38;
     const head = new THREE.Mesh(new THREE.SphereGeometry(0.16), mat(0xf0c8a0));
-    head.position.y = 0.55;
+    head.position.y = 0.88;
     torso.add(tm, head);
     const sword = new THREE.Group();
     const L = this.tun.swordLength;
@@ -114,6 +120,7 @@ export class Game {
       m.mesh.position.copy(v3(b.translation()));
       m.mesh.quaternion.copy(q4(b.rotation()));
     }
+    this.effects.update(dt);
     this.cam.update(dt, v3(this.player.pelvis.translation()));
     this.renderer.render(this.scene, this.camera);
   }

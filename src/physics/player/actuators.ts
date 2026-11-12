@@ -3,13 +3,12 @@
  *
  * Every actuator here acts *between* two player bodies, so whatever it does to one body it
  * does equal-and-opposite to the other:
- *  - Sword actuator: torso <-> sword at the grip. Implemented as Rapier spherical-joint angular
+ *  - Sword actuator: warrior <-> sword at the grip. Implemented as Rapier spherical-joint angular
  *    velocity motors. Joint motor impulses are applied by the constraint solver to both bodies
  *    as an exact equal-and-opposite pair, and are clamped to a maximum torque. The motors are
- *    solved implicitly, which is what makes a 20 kN·m actuator stable between a 50 kg torso and
- *    a 150 kg sword.
- *  - Balance/twist actuator: pelvis <-> torso at the hip, same mechanism, much weaker.
- *  - Reach: the grip anchor slides along the torso's forward axis at a limited speed; the joint
+ *    solved implicitly, which is what makes a 20 kN·m actuator stable between a 90 kg warrior
+ *    and a 150 kg sword.
+ *  - Reach: the grip anchor slides along the warrior's forward axis at a limited speed; the joint
  *    constraint supplies the (internal, equal-and-opposite) forces.
  *
  * The only exception is the AIR CONTROL cheat at the bottom, which is a force from nowhere on
@@ -19,7 +18,7 @@ import * as THREE from 'three';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import type { Tunables } from '../tunables';
 import { withForceAuthority } from '../forceGuard';
-import { q4, quatToRotVec, rotVecToQuat, v3, worldInertia, UP, clamp } from '../mathUtil';
+import { q4, quatToRotVec, rotVecToQuat, v3, worldInertia } from '../mathUtil';
 
 const ANG_AXES = [3, 4, 5] as const; // JointAxis.AngX/AngY/AngZ
 
@@ -48,10 +47,9 @@ function setMotorVelocity(j: RAPIER.ImpulseJoint, local: THREE.Vector3, factor: 
 }
 
 export interface ActuatedBodies {
-  pelvis: RAPIER.RigidBody;
+  /** The body the sword is held by (the whole warrior). */
   torso: RAPIER.RigidBody;
   sword: RAPIER.RigidBody;
-  hipJoint: RAPIER.ImpulseJoint;
   gripJoint: RAPIER.ImpulseJoint;
 }
 
@@ -144,49 +142,6 @@ export class SwordActuator {
     this.prevSpin.copy(spin);
     this.prevVcom.copy(vcom);
     this.havePrev = true;
-  }
-}
-
-/**
- * Balance + twist actuator between pelvis and torso. Tries to hold the torso at `upTarget`
- * (world) and its heading equal to the pelvis heading. Strength limited per axis.
- */
-export class BalanceActuator {
-  private lastKey = '';
-  readonly lastTarget = new THREE.Vector3();
-  constructor(private tun: Tunables) {}
-
-  apply(b: ActuatedBodies, upTarget: THREE.Vector3, enabled: boolean): void {
-    const tun = this.tun;
-    const key = enabled ? `${tun.balanceMaxTorque}/${tun.twistMaxTorque}` : 'off';
-    if (key !== this.lastKey) {
-      const k = enabled ? tun.balanceMaxTorque : 0;
-      setupAngularMotors(b.hipJoint, [k, enabled ? tun.twistMaxTorque : 0, k]);
-      this.lastKey = key;
-    }
-    if (!enabled) { setMotorVelocity(b.hipJoint, ta.set(0, 0, 0), 0); return; }
-    q4(b.pelvis.rotation(), tq);
-    q4(b.torso.rotation(), tqs);
-    const torsoUp = ta.copy(UP).applyQuaternion(tqs);
-    // tilt error (world): rotation taking torsoUp to upTarget
-    const axis = tb.crossVectors(torsoUp, upTarget);
-    const s = axis.length();
-    const ang = Math.atan2(s, clamp(torsoUp.dot(upTarget), -1, 1));
-    const tilt = s > 1e-9 ? axis.multiplyScalar(ang / s) : axis.set(0, 0, 0);
-    // twist error about torsoUp: bring torso heading to pelvis heading
-    const tf = tc.set(0, 0, 1).applyQuaternion(tqs);
-    const pf = new THREE.Vector3(0, 0, 1).applyQuaternion(tq);
-    tf.addScaledVector(torsoUp, -tf.dot(torsoUp));
-    pf.addScaledVector(torsoUp, -pf.dot(torsoUp));
-    let twist = 0;
-    if (tf.lengthSq() > 1e-6 && pf.lengthSq() > 1e-6) {
-      twist = Math.atan2(new THREE.Vector3().crossVectors(tf, pf).dot(torsoUp), tf.dot(pf));
-    }
-    const wp = v3(b.pelvis.angvel(), new THREE.Vector3());
-    const wpPerp = wp.clone().addScaledVector(torsoUp, -wp.dot(torsoUp));
-    const rel = tilt.multiplyScalar(tun.balanceGain).sub(wpPerp).addScaledVector(torsoUp, twist * tun.twistGain);
-    this.lastTarget.copy(upTarget);
-    setMotorVelocity(b.hipJoint, rel.applyQuaternion(tq.invert()), tun.balanceMotorFactor);
   }
 }
 

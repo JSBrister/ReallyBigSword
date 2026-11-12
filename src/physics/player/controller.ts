@@ -1,6 +1,6 @@
 /**
  * Locomotion & balance controller. Decides *what the legs try to do*: where to step, how fast
- * the planted legs sweep (walking drive), how the torso should lean, when to jump.
+ * the planted legs sweep (walking drive), when to jump.
  * It never applies a force. Everything it asks for is delivered through the foot contact
  * model (feet.ts) and the internal actuators (actuators.ts), so it is friction- and
  * strength-limited and frequently loses to the sword. That is the game.
@@ -9,7 +9,7 @@ import * as THREE from 'three';
 import type { Tunables } from '../tunables';
 import type { FootSystem, Foot } from './feet';
 import type { SystemState } from './metrics';
-import { clampLen, convexHullXZ, signedDistToPolygon, UP, yawOf } from '../mathUtil';
+import { clampLen, convexHullXZ, signedDistToPolygon, yawOf } from '../mathUtil';
 import { GEOM } from './geometry';
 
 export interface GaitInput {
@@ -21,11 +21,10 @@ export interface GaitInput {
 const smooth = (t: number) => t * t * (3 - 2 * t);
 
 export class GaitController {
-  /** Balance (torso lean + corrective steps) enabled. Tests switch it off. */
+  /** Balance (capture-point corrective steps) enabled. Tests switch it off. */
   balanceEnabled = true;
   steppingEnabled = true;
   readonly vDrive = new THREE.Vector3();
-  readonly upTarget = new THREE.Vector3(0, 1, 0);
   readonly capture = new THREE.Vector3();
   readonly supportCenter = new THREE.Vector3();
   support: { x: number; z: number }[] = [];
@@ -54,7 +53,7 @@ export class GaitController {
     if (this.airborne || feet.legsDisabled) {
       this.vDrive.set(sys.vcom.x, 0, sys.vcom.z);
     } else {
-      const maxAcc = 7; // m/s^2: how fast the commanded sweep may change; friction decides the rest
+      const maxAcc = tun.walkAccel; // m/s^2: how fast the commanded sweep may change; friction decides the rest
       const dv = vDes.clone().sub(this.vDrive);
       clampLen(dv, maxAcc * dt);
       this.vDrive.add(dv);
@@ -65,22 +64,32 @@ export class GaitController {
     const pts: { x: number; z: number }[] = [];
     for (const f of stance) for (const cp of f.points) if (cp.state !== 'air') pts.push({ x: cp.anchor.x, z: cp.anchor.z });
     this.support = convexHullXZ(pts);
+    // centre of pressure: load-weighted centroid of the planted contacts
     this.supportCenter.set(0, 0, 0);
-    for (const p of pts) { this.supportCenter.x += p.x; this.supportCenter.z += p.z; }
-    if (pts.length) this.supportCenter.divideScalar(pts.length);
+    let sumN = 0;
+    for (const f of stance) for (const cp of f.points) {
+      if (cp.state === 'air') continue;
+      const n = Math.max(cp.N, 1e-3);
+      this.supportCenter.x += cp.anchor.x * n; this.supportCenter.z += cp.anchor.z * n; sumN += n;
+    }
+    if (sumN > 0) this.supportCenter.divideScalar(sumN);
     let groundY = 0;
     for (const f of stance) groundY = Math.max(groundY, ...f.points.map((p) => (p.groundY > -1e6 ? p.groundY : 0)));
     const h = Math.max(0.4, sys.com.y - groundY);
     const w0 = Math.sqrt(9.81 / h);
     this.capture.set(sys.com.x + sys.vcom.x / w0, groundY, sys.com.z + sys.vcom.z / w0);
 
-    if (this.balanceEnabled && pts.length) {
-      const off = new THREE.Vector3(sys.com.x - this.supportCenter.x, 0, sys.com.z - this.supportCenter.z);
-      const lean = clampLen(off.multiplyScalar(-tun.leanGain), Math.tan(tun.maxLean));
-      this.upTarget.copy(UP).add(lean).normalize();
-    } else {
-      this.upTarget.copy(UP);
-    }
+    // --- ankle strategy: lean so the centre of pressure moves toward the capture point ---
+    if (this.balanceEnabled && pts.length && !this.airborne) {
+      // capture point ahead of where it should be -> press the toes (rest pose tilted *back*),
+      // which moves the centre of pressure forward and slows the fall. While walking the capture
+      // point is supposed to lead by vDes/w0.
+      const e = new THREE.Vector2(this.capture.x - this.supportCenter.x - vDes.x / w0,
+        this.capture.z - this.supportCenter.z - vDes.z / w0);
+      const lean = e.multiplyScalar(-tun.ankleGain);
+      if (lean.length() > tun.maxAnkleLean) lean.setLength(tun.maxAnkleLean);
+      feet.ankleLean.lerp(lean, 1 - Math.exp(-dt / 0.03));
+    } else feet.ankleLean.multiplyScalar(Math.exp(-dt / 0.05));
 
     // --- jump ---
     if (input.jump && !this.airborne && this.jumpCooldown <= 0 && this.jumpTimer <= 0 && !feet.legsDisabled) {
@@ -108,7 +117,7 @@ export class GaitController {
     if (!this.steppingEnabled || feet.legsDisabled || this.jumpTimer > 0) return;
     if (feet.feet.some((f) => f.phase === 'swing')) return;
     if (stance.length === 0) return; // airborne: wait for contact
-    if (this.timeSinceLand < 0.05) return;
+    if (this.timeSinceLand < 0.03) return;
 
     const targets = feet.feet.map((f) => this.footTarget(f, sys, pelvisPos, yaw, vDes));
     const errs = feet.feet.map((f, i) => Math.hypot(f.worldPos.x - targets[i].x, f.worldPos.z - targets[i].z));
@@ -148,9 +157,14 @@ export class GaitController {
   footTarget(f: Foot, sys: SystemState, pelvisPos: THREE.Vector3, yaw: number, vDes: THREE.Vector3): THREE.Vector3 {
     const tun = this.tun;
     const T = tun.stepDuration;
-    const base = new THREE.Vector3(sys.com.x, 0, sys.com.z)
-      .addScaledVector(new THREE.Vector3(sys.vcom.x, 0, sys.vcom.z), 0.5 * T + 0.12)
-      .addScaledVector(new THREE.Vector3(sys.vcom.x - vDes.x, 0, sys.vcom.z - vDes.z), 0.1);
+    // capture point (where the COM would come to rest over a point foot), pulled back a little
+    // when walking so the body keeps rolling forward over the new foot
+    const h = Math.max(0.5, sys.com.y - (f.worldPos.y || 0));
+    const w0 = Math.sqrt(9.81 / h);
+    const base = new THREE.Vector3(sys.com.x + sys.vcom.x / w0, 0, sys.com.z + sys.vcom.z / w0)
+      .addScaledVector(new THREE.Vector3(sys.vcom.x, 0, sys.vcom.z), -tun.walkPlacementLag);
+    void vDes;
+    void T;
     const right = new THREE.Vector3(-Math.cos(yaw), 0, Math.sin(yaw));
     const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
     base.addScaledVector(right, f.side * GEOM.stanceHalfWidth);

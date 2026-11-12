@@ -67,6 +67,6 @@ describe('force-source lint', () => {
     cmd.move.set(0, 0, 1);
     cmd.swingYaw = 6;
     expect(() => run(1)).not.toThrow();
-    expect(player.bodies.length).toBe(3);
+    expect(player.bodies.length).toBe(2);
   });
 });

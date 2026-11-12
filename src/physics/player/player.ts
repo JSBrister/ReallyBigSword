@@ -1,5 +1,5 @@
 /**
- * The warrior: three rigid bodies (pelvis+legs, torso, sword) and two joints.
+ * The warrior: two rigid bodies (warrior body, sword) joined at the grip by a ball joint.
  * This file builds them and runs the per-substep pipeline. It never applies a force itself:
  * forces come only from actuators.ts (internal pairs) and feet.ts (ground contact).
  */
@@ -13,7 +13,7 @@ import { q4, v3, UP } from '../mathUtil';
 import { GEOM } from './geometry';
 import { FootSystem } from './feet';
 import { GaitController } from './controller';
-import { SwordActuator, BalanceActuator, applyReach, applyAirControlCheat, type ActuatedBodies } from './actuators';
+import { SwordActuator, applyReach, applyAirControlCheat, type ActuatedBodies } from './actuators';
 import { systemState, type SystemState } from './metrics';
 
 export interface PlayerCommand {
@@ -41,16 +41,14 @@ export interface SpawnOptions {
 }
 
 export class Player implements ActuatedBodies {
-  pelvis!: RAPIER.RigidBody;
-  torso!: RAPIER.RigidBody;
+  /** Legs + torso + head: one rigid body. */
+  body!: RAPIER.RigidBody;
   sword!: RAPIER.RigidBody;
-  hipJoint!: RAPIER.ImpulseJoint;
   gripJoint!: RAPIER.ImpulseJoint;
   swordBlade!: RAPIER.Collider;
   feet!: FootSystem;
   gait!: GaitController;
   readonly swordAct: SwordActuator;
-  readonly balance: BalanceActuator;
   readonly state: SystemState = { mass: 0, com: new THREE.Vector3(), vcom: new THREE.Vector3(), P: new THREE.Vector3(), L: new THREE.Vector3() };
   reach = 0;
   readonly gripLocal = new THREE.Vector3();
@@ -66,11 +64,13 @@ export class Player implements ActuatedBodies {
 
   constructor(private pw: PhysicsWorld, private tun: Tunables, spawn: SpawnOptions) {
     this.swordAct = new SwordActuator(tun);
-    this.balance = new BalanceActuator(tun);
     this.build(spawn);
   }
 
-  get bodies(): RAPIER.RigidBody[] { return [this.pelvis, this.torso, this.sword]; }
+  get bodies(): RAPIER.RigidBody[] { return [this.body, this.sword]; }
+  /** Aliases: the body is both the thing the legs hang from and the thing the grip is on. */
+  get pelvis(): RAPIER.RigidBody { return this.body; }
+  get torso(): RAPIER.RigidBody { return this.body; }
   get swordLength(): number { return this.tun.swordLength; }
   get swordTip(): THREE.Vector3 {
     return new THREE.Vector3(0, this.tun.swordLength - GEOM.pommel, 0)
@@ -83,35 +83,25 @@ export class Player implements ActuatedBodies {
     const heading = spawn.heading ?? 0;
     const qh = new THREE.Quaternion().setFromAxisAngle(UP, heading);
     const ground = spawn.position;
-    const pelvisPos = new THREE.Vector3(ground.x, ground.y + tun.legLength - GEOM.hipOffset + 0.01, ground.z);
+    const bodyPos = new THREE.Vector3(ground.x, ground.y + tun.legLength + 0.01, ground.z);
     const playerGroups = groups(GROUP.PLAYER, GROUP.GROUND | GROUP.ENEMY | GROUP.SHIELD | GROUP.DEBRIS | GROUP.DOOR);
     const swordGroups = groups(GROUP.SWORD, GROUP.GROUND | GROUP.ENEMY | GROUP.SHIELD | GROUP.DEBRIS | GROUP.DOOR);
 
-    // --- pelvis + legs ---
-    this.pelvis = world.createRigidBody(R.RigidBodyDesc.dynamic()
-      .setTranslation(pelvisPos.x, pelvisPos.y, pelvisPos.z).setRotation(qh).setCanSleep(false));
-    world.createCollider(R.ColliderDesc.capsule(0.12, 0.18).setTranslation(0, 0.15, 0).setDensity(0)
-      .setFriction(0).setCollisionGroups(playerGroups), this.pelvis);
-    this.pelvis.setAdditionalMassProperties(tun.pelvisMass, { x: 0, y: 0, z: 0 },
-      { x: tun.pelvisMass * 0.08, y: tun.pelvisMass * 0.02, z: tun.pelvisMass * 0.08 }, { x: 0, y: 0, z: 0, w: 1 }, true);
-
-    // --- torso (+ arms, head) ---
-    const hipWorld = pelvisPos.clone().add(new THREE.Vector3(0, GEOM.hipOffset, 0));
-    const torsoPos = hipWorld.clone().add(new THREE.Vector3(0, GEOM.torsoAboveHip, 0));
-    this.torso = world.createRigidBody(R.RigidBodyDesc.dynamic()
-      .setTranslation(torsoPos.x, torsoPos.y, torsoPos.z).setRotation(qh).setCanSleep(false));
-    world.createCollider(R.ColliderDesc.capsule(0.15, 0.21).setTranslation(0, 0.04, 0).setDensity(0)
-      .setFriction(0.5).setCollisionGroups(playerGroups), this.torso);
-    world.createCollider(R.ColliderDesc.ball(0.16).setTranslation(0, 0.55, 0).setDensity(0)
-      .setFriction(0.5).setCollisionGroups(playerGroups), this.torso);
-    const tm = tun.torsoMass;
-    this.torso.setAdditionalMassProperties(tm, { x: 0, y: 0, z: 0 }, { x: tm * 0.04, y: tm * 0.022, z: tm * 0.04 },
+    // --- warrior body (legs + torso + arms + head as one rigid body; see README "deviations") ---
+    this.body = world.createRigidBody(R.RigidBodyDesc.dynamic()
+      .setTranslation(bodyPos.x, bodyPos.y, bodyPos.z).setRotation(qh).setCanSleep(false));
+    // legs collider stops at the knees: below that the foot contact model owns the ground
+    world.createCollider(R.ColliderDesc.capsule(0.16, 0.17).setTranslation(0, -0.2, 0).setDensity(0)
+      .setFriction(0).setCollisionGroups(playerGroups), this.body);
+    world.createCollider(R.ColliderDesc.capsule(0.17, 0.22).setTranslation(0, 0.38, 0).setDensity(0)
+      .setFriction(0.5).setCollisionGroups(playerGroups), this.body);
+    world.createCollider(R.ColliderDesc.ball(0.16).setTranslation(0, 0.88, 0).setDensity(0)
+      .setFriction(0.5).setCollisionGroups(playerGroups), this.body);
+    const m = tun.warriorMass;
+    // a 1.9 m person with outsized pauldrons: tall (pitch/roll) but slim about the vertical
+    this.body.setAdditionalMassProperties(m, { x: 0, y: 0.1, z: 0 }, { x: m * 0.26, y: m * 0.045, z: m * 0.26 },
       { x: 0, y: 0, z: 0, w: 1 }, true);
-
-    this.hipJoint = world.createImpulseJoint(
-      R.JointData.spherical({ x: 0, y: GEOM.hipOffset, z: 0 }, { x: 0, y: -GEOM.torsoAboveHip, z: 0 }),
-      this.pelvis, this.torso, true);
-    this.hipJoint.setContactsEnabled(false);
+    const torsoPos = bodyPos;
 
     // --- sword ---
     this.reach = 0;
@@ -151,23 +141,22 @@ export class Player implements ActuatedBodies {
       this.torso, this.sword, true);
     this.gripJoint.setContactsEnabled(false);
 
-    for (const [b, n] of [[this.pelvis, 'pelvis'], [this.torso, 'torso'], [this.sword, 'sword']] as const) {
+    for (const [b, n] of [[this.body, 'body'], [this.sword, 'sword']] as const) {
       b.recomputeMassPropertiesFromColliders(); // make mass()/worldCom() valid before the first step
       guardPlayerBody(b, n);
     }
 
-    this.feet = new FootSystem(this.pw, tun, this.pelvis);
+    this.feet = new FootSystem(this.pw, tun, this.body);
     this.gait = new GaitController(tun, this.feet);
     this.swordAct.reset(this);
     systemState(this.bodies, this.state);
-    if (spawn.grounded !== false) this.gait.plantAt(this.state, pelvisPos, qh);
+    if (spawn.grounded !== false) this.gait.plantAt(this.state, bodyPos, qh);
   }
 
   /** Remove all bodies and rebuild at a new spawn (also picks up changed mass/length tunables). */
   respawn(spawn: SpawnOptions): void {
     const world = this.pw.world;
     world.removeImpulseJoint(this.gripJoint, true);
-    world.removeImpulseJoint(this.hipJoint, true);
     for (const b of this.bodies) world.removeRigidBody(b);
     this.health = this.maxHealth;
     this.fallenTime = 0;
@@ -208,7 +197,6 @@ export class Player implements ActuatedBodies {
       cmdW.set(0, cmd.swingYaw, 0).addScaledVector(pitchAxis, cmd.swingPitch);
     }
     this.swordAct.apply(this, cmdW, dt);
-    this.balance.apply(this, this.gait.upTarget, this.gait.balanceEnabled && !this.feet.legsDisabled);
 
     // reach
     if (cmd.reach !== 0) {

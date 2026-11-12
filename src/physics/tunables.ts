@@ -4,19 +4,17 @@
  */
 export interface Tunables {
   // --- masses & geometry (rebuild) ---
-  pelvisMass: number; // pelvis + legs lump, kg
-  torsoMass: number; // torso + arms + head, kg
-  swordMass: number; // kg, must stay > pelvisMass + torsoMass
+  warriorMass: number; // kg, whole warrior (one rigid body)
+  swordMass: number; // kg, must stay > warriorMass
   swordLength: number; // m, pommel to tip
-  legLength: number; // m, pelvis COM to sole at rest
+  legLength: number; // m, hip (body origin) to sole at rest
 
   // --- feet / friction ---
   muStatic: number; // default stone static coefficient
   muKinetic: number; // default stone kinetic coefficient
   footNormalStiffness: number; // N/m per contact point
   footNormalDamping: number; // N·s/m per contact point
-  footTangentStiffness: number; // N/m per contact point
-  footTangentDamping: number; // N·s/m per contact point
+  stickBiasTime: number; // s, how fast a sticking point is pulled back onto its anchor
   restickSpeed: number; // m/s, slip speed below which a foot may re-stick
   restickTime: number; // s, how long the slip must stay slow before re-sticking
   legMaxStretch: number; // m, how far the leg drive may wind its spring (leg strength)
@@ -28,21 +26,18 @@ export interface Tunables {
   swordMaxLead: number; // rad, how far the commanded pose may run ahead of the real pose
   swordMaxRate: number; // rad/s, cap on commanded relative angular velocity
   reachSpeed: number; // m/s grip slide speed
-  balanceMaxTorque: number; // N·m, torso<->pelvis pitch/roll
-  balanceGain: number; // 1/s
-  balanceMotorFactor: number; // N·m·s/rad
-  twistMaxTorque: number; // N·m, torso<->pelvis yaw
-  twistGain: number; // 1/s
 
   // --- locomotion ---
   walkSpeed: number; // m/s commanded
+  walkAccel: number; // m/s^2, how fast the commanded leg sweep may change
+  walkPlacementLag: number; // s, how far behind the capture point steps land while walking
   stepDuration: number; // s
   maxStepLength: number; // m, from hip
   maxFootSpeed: number; // m/s swing foot speed limit
+  ankleGain: number; // rad of lean per metre of capture-point offset from the support centre
+  maxAnkleLean: number; // rad
   jumpForce: number; // N total extra leg thrust during push
   jumpPushTime: number; // s
-  leanGain: number; // rad per metre of COM offset
-  maxLean: number; // rad
 
   // --- combat ---
   damageThreshold: number; // m/s relative normal speed
@@ -60,18 +55,16 @@ export interface Tunables {
 }
 
 export const defaultTunables: Tunables = {
-  pelvisMass: 40,
-  torsoMass: 50,
+  warriorMass: 90,
   swordMass: 150,
   swordLength: 2.8,
-  legLength: 0.92,
+  legLength: 0.95,
 
   muStatic: 0.9,
   muKinetic: 0.5,
-  footNormalStiffness: 40000,
-  footNormalDamping: 2500,
-  footTangentStiffness: 40000,
-  footTangentDamping: 1500,
+  footNormalStiffness: 150000,
+  footNormalDamping: 4000,
+  stickBiasTime: 0.06,
   restickSpeed: 0.08,
   restickTime: 0.05,
   legMaxStretch: 0.12,
@@ -82,20 +75,17 @@ export const defaultTunables: Tunables = {
   swordMaxLead: 0.6,
   swordMaxRate: 14,
   reachSpeed: 1.6,
-  balanceMaxTorque: 2500,
-  balanceGain: 15,
-  balanceMotorFactor: 2500,
-  twistMaxTorque: 6000,
-  twistGain: 20,
 
-  walkSpeed: 2.6,
+  walkSpeed: 1.6,
+  walkAccel: 4,
+  walkPlacementLag: 0.12,
   stepDuration: 0.3,
-  maxStepLength: 0.75,
+  maxStepLength: 0.85,
   maxFootSpeed: 6,
+  ankleGain: 0.8,
+  maxAnkleLean: 0.25,
   jumpForce: 14000,
   jumpPushTime: 0.16,
-  leanGain: 0.9,
-  maxLean: 0.35,
 
   damageThreshold: 8,
   damagePerMps: 6,
