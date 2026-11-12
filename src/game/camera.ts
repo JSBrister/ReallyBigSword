@@ -18,17 +18,24 @@ export class FollowCamera {
     this.pitch = THREE.MathUtils.clamp(this.pitch + dy * 0.004, -0.15, 1.3);
   }
 
+  /** Optional: returns the free distance along a ray (for not clipping into walls). */
+  collide: ((from: THREE.Vector3, dir: THREE.Vector3, max: number) => number) | null = null;
+  private dist = 7.5;
+
   update(dt: number, follow: THREE.Vector3, ceiling = Infinity): void {
     const goal = follow.clone().add(new THREE.Vector3(0, 1.1, 0));
     if (!this.initialised) { this.target.copy(goal); this.initialised = true; }
     this.target.lerp(goal, 1 - Math.exp(-dt * 6));
-    const d = this.distance;
-    const off = new THREE.Vector3(
-      Math.sin(this.yaw) * Math.cos(this.pitch) * d,
-      Math.sin(this.pitch) * d,
-      Math.cos(this.yaw) * Math.cos(this.pitch) * d,
+    const dir = new THREE.Vector3(
+      Math.sin(this.yaw) * Math.cos(this.pitch),
+      Math.sin(this.pitch),
+      Math.cos(this.yaw) * Math.cos(this.pitch),
     );
-    const pos = this.target.clone().add(off);
+    let d = this.distance;
+    if (this.collide) d = Math.max(1.2, Math.min(d, this.collide(this.target, dir, d + 0.3) - 0.3));
+    // pull in fast, ease back out
+    this.dist = d < this.dist ? d : this.dist + (d - this.dist) * (1 - Math.exp(-dt * 3));
+    const pos = this.target.clone().addScaledVector(dir, this.dist);
     if (pos.y > ceiling - 0.3) pos.y = ceiling - 0.3;
     this.camera.position.copy(pos);
     this.camera.lookAt(this.target);

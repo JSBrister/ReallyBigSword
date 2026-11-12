@@ -89,12 +89,16 @@ export class SwordActuator {
     this.havePrev = false;
   }
 
+  /** 0..1 strength multiplier chosen by the controller (relaxed grip while scrambling up). */
+  strength = 1;
+
   apply(b: ActuatedBodies, cmdWorld: THREE.Vector3, dt: number): void {
     const tun = this.tun;
-    if (this.lastMax !== tun.swordMaxTorque) {
-      const m = tun.swordMaxTorque;
+    const max = tun.swordMaxTorque * this.strength;
+    if (this.lastMax !== max) {
+      const m = max;
       setupAngularMotors(b.gripJoint, [m, m, m]);
-      this.lastMax = m;
+      this.lastMax = max;
     }
     q4(b.torso.rotation(), tq);
     q4(b.sword.rotation(), tqs);
@@ -115,6 +119,10 @@ export class SwordActuator {
     if (e > tun.swordMaxLead) {
       err.multiplyScalar(tun.swordMaxLead / e);
       this.qTarget.copy(rotVecToQuat(err, tqErr)).multiply(tqRel).normalize();
+    }
+    if (this.strength < 1) {
+      // relaxed: let the sword settle where it lies instead of holding the old pose
+      this.qTarget.slerp(tqRel, 1 - this.strength);
     }
     const vTarget = tc.copy(cmdLocal).addScaledVector(err, tun.swordHoldGain);
     setMotorVelocity(b.gripJoint, vTarget, tun.swordMotorFactor);

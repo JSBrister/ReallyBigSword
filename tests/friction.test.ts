@@ -32,7 +32,7 @@ function frictionAudit(player: Player) {
   return { check, get worstStick() { return worstStick; }, get worstSlip() { return worstSlip; }, transitions };
 }
 
-const quiet = (player: Player) => { player.gait.steppingEnabled = false; player.gait.balanceEnabled = false; };
+const quiet = (player: Player) => { player.gait.steppingEnabled = false; };
 const W = (player: Player) => player.state.mass * 9.81;
 
 describe('foot friction', () => {
@@ -79,12 +79,12 @@ describe('foot friction', () => {
     expect(Math.abs(moved)).toBeLessThan(0.05); // springs give a few cm, no sliding
 
     // 2. a brief hard shove starts a slide; the same moderate push then keeps it going
-    run(0.06, () => push(player, F.clone().multiplyScalar(3), pw.substepDt));
+    run(0.05, () => push(player, F.clone().multiplyScalar(2), pw.substepDt));
     let minSpeed = Infinity;
     const xs = player.pelvis.translation().x;
     run(1.0, (t) => {
       push(player, F, pw.substepDt);
-      if (t > 1.7) minSpeed = Math.min(minSpeed, player.pelvis.linvel().x);
+      if (t > 1.7) minSpeed = Math.min(minSpeed, player.state.vcom.x);
     });
     const slid = player.pelvis.translation().x - xs;
     console.log(`after shove: slid ${slid.toFixed(2)} m, min speed late ${minSpeed.toFixed(2)} m/s`);

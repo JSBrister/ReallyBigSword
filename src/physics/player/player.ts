@@ -38,6 +38,8 @@ export interface SpawnOptions {
   swordDir?: THREE.Vector3;
   /** Spawn with feet planted on the ground below (default true). */
   grounded?: boolean;
+  /** Extra rotation of the whole warrior + sword about the spawn point (tests: start lying down). */
+  tiltRotation?: THREE.Quaternion;
 }
 
 export class Player implements ActuatedBodies {
@@ -76,12 +78,16 @@ export class Player implements ActuatedBodies {
     return new THREE.Vector3(0, this.tun.swordLength - GEOM.pommel, 0)
       .applyQuaternion(q4(this.sword.rotation())).add(v3(this.sword.translation()));
   }
-  get fallen(): boolean { return this.feet.legsDisabled; }
+  /** Toppled: torso tilted more than 60° (the legs may still be pushing to get him back up). */
+  get fallen(): boolean {
+    return new THREE.Vector3(0, 1, 0).applyQuaternion(q4(this.body.rotation())).y < 0.5 || this.feet.legsDisabled;
+  }
 
   private build(spawn: SpawnOptions): void {
     const R = this.pw.R, world = this.pw.world, tun = this.tun;
     const heading = spawn.heading ?? 0;
     const qh = new THREE.Quaternion().setFromAxisAngle(UP, heading);
+    if (spawn.tiltRotation) qh.premultiply(spawn.tiltRotation);
     const ground = spawn.position;
     const bodyPos = new THREE.Vector3(ground.x, ground.y + tun.legLength + 0.01, ground.z);
     const playerGroups = groups(GROUP.PLAYER, GROUP.GROUND | GROUP.ENEMY | GROUP.SHIELD | GROUP.DEBRIS | GROUP.DOOR);
@@ -178,7 +184,9 @@ export class Player implements ActuatedBodies {
     const pelvisPos = v3(this.pelvis.translation());
     const pelvisQ = q4(this.pelvis.rotation());
 
-    this.gait.update(dt, { move: cmd.move, jump: this.pendingJump }, this.state, pelvisPos, pelvisQ);
+    this.feet.updateFrame();
+    this.gait.update(dt, { move: cmd.move, jump: this.pendingJump }, this.state, pelvisPos, this.feet.frameQ,
+      pelvisQ, v3(this.body.angvel()), v3(this.body.linvel()));
     this.pendingJump = false;
 
     // sword command: yaw about world up, pitch about the horizontal axis across the blade
@@ -196,6 +204,8 @@ export class Player implements ActuatedBodies {
       pitchAxis.normalize();
       cmdW.set(0, cmd.swingYaw, 0).addScaledVector(pitchAxis, cmd.swingPitch);
     }
+    // while toppled the warrior relaxes his grip (a choice, not a cheat: less internal torque)
+    this.swordAct.strength = this.fallen ? 0.05 : Math.min(1, this.swordAct.strength + dt * 0.7);
     this.swordAct.apply(this, cmdW, dt);
 
     // reach
@@ -215,6 +225,6 @@ export class Player implements ActuatedBodies {
   postStep(dt: number): void {
     this.gripWorld.copy(this.gripLocal).applyQuaternion(q4(this.torso.rotation())).add(v3(this.torso.translation()));
     this.swordAct.measure(this, this.gripWorld, dt);
-    this.fallenTime = this.feet.legsDisabled ? this.fallenTime + dt : 0;
+    this.fallenTime = this.fallen ? this.fallenTime + dt : 0;
   }
 }

@@ -87,3 +87,21 @@ export function signedDistToPolygon(pt: { x: number; z: number }, poly: { x: num
   }
   return inside ? -minD : minD;
 }
+
+/** Nearest point inside a convex polygon (CCW, xz). Degenerate polygons clamp to the segment/point. */
+export function clampToPolygon(pt: { x: number; z: number }, poly: { x: number; z: number }[]): { x: number; z: number } {
+  if (poly.length === 0) return { x: pt.x, z: pt.z };
+  if (poly.length >= 3 && signedDistToPolygon(pt, poly) <= 0) return { x: pt.x, z: pt.z };
+  let best = { x: poly[0].x, z: poly[0].z }, bestD = Infinity;
+  const n = poly.length;
+  for (let i = 0; i < (n === 1 ? 1 : n); i++) {
+    const a = poly[i], b = poly[(i + 1) % n];
+    const ex = b.x - a.x, ez = b.z - a.z;
+    const len2 = ex * ex + ez * ez;
+    const t = len2 > 1e-12 ? clamp(((pt.x - a.x) * ex + (pt.z - a.z) * ez) / len2, 0, 1) : 0;
+    const c = { x: a.x + t * ex, z: a.z + t * ez };
+    const d = Math.hypot(pt.x - c.x, pt.z - c.z);
+    if (d < bestD) { bestD = d; best = c; }
+  }
+  return best;
+}

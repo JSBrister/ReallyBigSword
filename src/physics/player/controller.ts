@@ -39,7 +39,12 @@ export class GaitController {
 
   constructor(private tun: Tunables, private feet: FootSystem) {}
 
-  update(dt: number, input: GaitInput, sys: SystemState, pelvisPos: THREE.Vector3, pelvisQ: THREE.Quaternion): void {
+  /**
+   * pelvisPos: hip (body origin). pelvisQ: the legs' stance frame (heading only).
+   * bodyQ/bodyW: the torso's actual orientation and angular velocity.
+   */
+  update(dt: number, input: GaitInput, sys: SystemState, pelvisPos: THREE.Vector3, pelvisQ: THREE.Quaternion,
+    bodyQ: THREE.Quaternion, bodyW: THREE.Vector3, hipVel: THREE.Vector3): void {
     const tun = this.tun;
     const feet = this.feet;
     const stance = feet.feet.filter((f) => f.phase === 'stance' && f.inContact);
@@ -50,13 +55,19 @@ export class GaitController {
 
     // --- walking drive (what the planted legs sweep at) ---
     const vDes = new THREE.Vector3(input.move.x, 0, input.move.z).multiplyScalar(tun.walkSpeed);
+    // The legs push the hips toward the desired velocity with a bounded acceleration: the planted
+    // feet sweep back at (current hip velocity + a·dt). Friction decides how much of that push
+    // actually happens; the support polygon decides whether the torso can stay upright doing it.
     if (this.airborne || feet.legsDisabled) {
-      this.vDrive.set(sys.vcom.x, 0, sys.vcom.z);
+      this.vDrive.set(hipVel.x, 0, hipVel.z);
+    } else if (vDes.lengthSq() < 1e-4 && Math.hypot(hipVel.x, hipVel.z) < 0.15) {
+      // standing: the planted feet just hold their ground (friction decides how much they can)
+      this.vDrive.set(0, 0, 0);
     } else {
-      const maxAcc = tun.walkAccel; // m/s^2: how fast the commanded sweep may change; friction decides the rest
-      const dv = vDes.clone().sub(this.vDrive);
-      clampLen(dv, maxAcc * dt);
-      this.vDrive.add(dv);
+      // walking: push the hips toward the desired velocity with a bounded acceleration
+      const acc = new THREE.Vector3(vDes.x - hipVel.x, 0, vDes.z - hipVel.z).divideScalar(0.25);
+      clampLen(acc, tun.walkAccel);
+      this.vDrive.set(hipVel.x, 0, hipVel.z).addScaledVector(acc, dt);
     }
     feet.driveVel.copy(this.vDrive);
 
@@ -79,17 +90,20 @@ export class GaitController {
     const w0 = Math.sqrt(9.81 / h);
     this.capture.set(sys.com.x + sys.vcom.x / w0, groundY, sys.com.z + sys.vcom.z / w0);
 
-    // --- ankle strategy: lean so the centre of pressure moves toward the capture point ---
-    if (this.balanceEnabled && pts.length && !this.airborne) {
-      // capture point ahead of where it should be -> press the toes (rest pose tilted *back*),
-      // which moves the centre of pressure forward and slows the fall. While walking the capture
-      // point is supposed to lead by vDes/w0.
-      const e = new THREE.Vector2(this.capture.x - this.supportCenter.x - vDes.x / w0,
-        this.capture.z - this.supportCenter.z - vDes.z / w0);
-      const lean = e.multiplyScalar(-tun.ankleGain);
-      if (lean.length() > tun.maxAnkleLean) lean.setLength(tun.maxAnkleLean);
-      feet.ankleLean.lerp(lean, 1 - Math.exp(-dt / 0.03));
-    } else feet.ankleLean.multiplyScalar(Math.exp(-dt / 0.05));
+    // --- balance ---
+    // Hip torque keeping the torso upright on its legs. It is delivered by moving the centre of
+    // pressure, so it is limited by the support polygon as well as by the hip's strength.
+    if (this.balanceEnabled && !this.airborne) {
+      const up = new THREE.Vector3(0, 1, 0).applyQuaternion(bodyQ);
+      const e = new THREE.Vector3().crossVectors(up, new THREE.Vector3(0, 1, 0)); // axis * sin(tilt)
+      const wh = bodyW.clone(); wh.y = 0;
+      // feed-forward: hold up everything above the hips (torso + sword) against gravity
+      const ff = new THREE.Vector3().subVectors(sys.com, pelvisPos).cross(new THREE.Vector3(0, sys.mass * 9.81, 0));
+      const tau = e.multiplyScalar(tun.hipStiffness).addScaledVector(wh, -tun.hipDamping).add(ff);
+      tau.y = 0;
+      if (tau.length() > tun.hipMaxTorque) tau.setLength(tun.hipMaxTorque);
+      feet.hipTorqueTarget.copy(tau);
+    } else feet.hipTorqueTarget.set(0, 0, 0);
 
     // --- jump ---
     if (input.jump && !this.airborne && this.jumpCooldown <= 0 && this.jumpTimer <= 0 && !feet.legsDisabled) {
@@ -108,6 +122,9 @@ export class GaitController {
       if (this.retracting && this.airborne) this.setExtension(-0.12, 2.5, dt);
       else { this.retracting = false; this.setExtension(0, 1.5, dt); }
     }
+
+    // legs usable again after being upside down: put the feet straight under the warrior
+    if (feet.regained) this.plantAt(sys, pelvisPos, pelvisQ);
 
     // --- swing feet ---
     const yaw = yawOf(pelvisQ);

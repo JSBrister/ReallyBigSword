@@ -12,6 +12,7 @@ export interface Tunables {
   // --- feet / friction ---
   muStatic: number; // default stone static coefficient
   muKinetic: number; // default stone kinetic coefficient
+  legTravel: number; // m, how much further the standing legs can extend while still pushing
   footNormalStiffness: number; // N/m per contact point
   footNormalDamping: number; // N·s/m per contact point
   stickBiasTime: number; // s, how fast a sticking point is pulled back onto its anchor
@@ -30,12 +31,14 @@ export interface Tunables {
   // --- locomotion ---
   walkSpeed: number; // m/s commanded
   walkAccel: number; // m/s^2, how fast the commanded leg sweep may change
+  driveMaxLag: number; // m/s, how far the leg sweep may run ahead of the hips before it re-syncs
   walkPlacementLag: number; // s, how far behind the capture point steps land while walking
   stepDuration: number; // s
   maxStepLength: number; // m, from hip
   maxFootSpeed: number; // m/s swing foot speed limit
-  ankleGain: number; // rad of lean per metre of capture-point offset from the support centre
-  maxAnkleLean: number; // rad
+  hipMaxTorque: number; // N·m, strongest tilting torque the hips/legs can put on the torso
+  hipStiffness: number; // N·m/rad, keeping the torso upright on the legs
+  hipDamping: number; // N·m·s/rad
   jumpForce: number; // N total extra leg thrust during push
   jumpPushTime: number; // s
 
@@ -62,6 +65,7 @@ export const defaultTunables: Tunables = {
 
   muStatic: 0.9,
   muKinetic: 0.5,
+  legTravel: 0,
   footNormalStiffness: 150000,
   footNormalDamping: 4000,
   stickBiasTime: 0.06,
@@ -78,12 +82,14 @@ export const defaultTunables: Tunables = {
 
   walkSpeed: 1.6,
   walkAccel: 4,
+  driveMaxLag: 0.5,
   walkPlacementLag: 0.12,
   stepDuration: 0.3,
   maxStepLength: 0.85,
   maxFootSpeed: 6,
-  ankleGain: 0.8,
-  maxAnkleLean: 0.25,
+  hipMaxTorque: 4000,
+  hipStiffness: 20000,
+  hipDamping: 2500,
   jumpForce: 14000,
   jumpPushTime: 0.16,
 
