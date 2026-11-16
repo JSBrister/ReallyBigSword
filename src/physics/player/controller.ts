@@ -99,7 +99,7 @@ export class GaitController {
       const acc = new THREE.Vector3(vDes.x - hipVel.x, 0, vDes.z - hipVel.z).divideScalar(0.25);
       // slowing down a top-heavy load has to be gentler than speeding it up, or it pitches over
       const braking = acc.x * hipVel.x + acc.z * hipVel.z < 0;
-      clampLen(acc, braking ? tun.walkDecel : tun.walkAccel);
+      clampLen(acc, braking ? (this.leanShiftScale > 0 ? tun.walkDecelEmpty : tun.walkDecel) : tun.walkAccel);
       // Push only as hard as the stance can balance: accelerating the hips at a needs the centre
       // of pressure about L·a/g ahead of them (L = hip height), inside the feet.
       if (tun.stanceLimitedAccel && this.support.length >= 3 && acc.lengthSq() > 1e-6) {
@@ -261,7 +261,10 @@ export class GaitController {
     // A leaning torso is righted by the ground force passing on the other side of the hips, so
     // the feet go a little that way (with a light load the COM is almost at the hips, and the
     // capture point alone would never put a foot where the torso can push off it).
-    base.addScaledVector(clampLen(this.torsoLean.clone(), 0.5), tun.leanFootShift * this.leanShiftScale);
+    // (only near standstill: on the move he leans the way he is going, and stepping toward that
+    // lean drives him on faster and faster)
+    const still = Math.max(0, 1 - Math.hypot(sys.vcom.x, sys.vcom.z) / tun.leanShiftFadeSpeed);
+    base.addScaledVector(clampLen(this.torsoLean.clone(), 0.5), tun.leanFootShift * this.leanShiftScale * still);
     // the target is for the middle of the sole, the controller positions the ankle
     base.addScaledVector(fwd, -(GEOM.heel + GEOM.toe) / 2);
     // keep within leg reach of the hip

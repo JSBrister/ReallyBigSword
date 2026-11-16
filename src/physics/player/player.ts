@@ -37,6 +37,8 @@ export interface PlayerCommand {
   // --- technique mode (competent hero) ---
   charge: boolean;
   spin: boolean;
+  /** Which way to spin: +1 turns him to his left (counterclockwise from above), -1 to his right. */
+  spinDir: number;
   /** Edge: overhead drop. */
   drop: boolean;
   plant: boolean;
@@ -46,7 +48,7 @@ export interface PlayerCommand {
 
 export const emptyCommand = (): PlayerCommand => ({
   move: new THREE.Vector3(), effort: new THREE.Vector2(), grip: false, attack: null, spinHeld: false,
-  reach: 0, jump: false, face: null, charge: false, spin: false, drop: false, plant: false, reachDir: 0,
+  reach: 0, jump: false, face: null, charge: false, spin: false, spinDir: 1, drop: false, plant: false, reachDir: 0,
 });
 
 export interface SpawnOptions {
@@ -253,6 +255,14 @@ export class Player implements ActuatedBodies {
     this.swordAct.newJoint(this);
   }
 
+  /** How far (m, horizontally) the balanced system's centre of mass is from the middle of his
+   *  feet's support: 0 is centred. */
+  balanceDrift(): number {
+    const c = this.gait.supportCenter, e = this.effState.com;
+    if (!this.gait.support.length) return 0;
+    return Math.hypot(e.x - c.x, e.z - c.z);
+  }
+
   /** The sword's balance point in world space. */
   balanceWorld(): THREE.Vector3 {
     return new THREE.Vector3(0, this.balancePoint, 0).applyQuaternion(q4(this.sword.rotation())).add(v3(this.sword.translation()));
@@ -448,7 +458,10 @@ export class Player implements ActuatedBodies {
       this.swordAct.support = out.support;
       this.swordAct.applyFree(this, out.effort, this.gripPoint(), dt);
     } else {
-      this.swordAct.poseTarget = this.fallen ? null : out.pose;
+      // a pose given in the heading frame is held steady in the world: the arms take up the
+      // torso's lean instead of swinging the sword with it
+      const pose = out.poseInHeading ? bodyQ.clone().invert().multiply(this.feet.frameQ).multiply(out.pose) : out.pose;
+      this.swordAct.poseTarget = this.fallen ? null : pose;
       this.swordAct.poseRate = out.poseRate;
       this.swordAct.apply(this, this.swingCmd.set(0, 0, 0), dt);
     }

@@ -1,6 +1,7 @@
 import { it } from 'vitest';
 import * as THREE from 'three';
 import { runSession } from './session';
+import { withTeleportAuthority } from '../../src/physics/forceGuard';
 import { GoblinManager } from '../../src/physics/goblin';
 it('approachdbg', async () => {
   const target = new THREE.Vector3(0, 0, 4); let k = 0;
@@ -9,10 +10,11 @@ it('approachdbg', async () => {
     const dir = new THREE.Vector3(target.x - p.x, 0, target.z - p.z); const dist = dir.length(); dir.normalize();
     c.charge = t > 0.3; c.move.copy(dist > 1.9 ? dir : dir.multiplyScalar(0.05));
     const st = pl.tech!.state;
+    if (process.env.MOVESWORD && !pl.holding && !(globalThis as any).moved) { (globalThis as any).moved = true; withTeleportAuthority(() => { pl.sword.setTranslation({ x: 50, y: 1, z: 50 }, true); pl.sword.setLinvel({ x: 0, y: 0, z: 0 }, true); pl.sword.setAngvel({ x: 0, y: 0, z: 0 }, true); }); }
     if (t > Number(process.env.FROM ?? 4.5) && k++ % 24 === 0) {
       const u = new THREE.Vector3(0, 1, 0).applyQuaternion(pl.body.rotation() as any); const v = pl.body.linvel(); const o = pl.tech!.out; const b = pl.balanceWorld();
       console.log(t.toFixed(2), st, 'up', u.x.toFixed(2), u.z.toFixed(2), 'hip', p.x.toFixed(2), p.z.toFixed(2), 'v', v.x.toFixed(2), v.z.toFixed(2), 'B', b.x.toFixed(2), b.y.toFixed(2), b.z.toFixed(2), 'face', o.face?.toFixed(2), 'yaw', pl.feet.frameYaw.toFixed(2), 'mv', o.moveVel.x.toFixed(2), o.moveVel.z.toFixed(2),
-        'feet', pl.feet.feet.map((f: any) => f.phase[0] + (f.inContact ? '+' : '-')).join(''), 'hold', pl.holding, 'sd', (()=>{const d=new THREE.Vector3(0,1,0).applyQuaternion(pl.sword.rotation() as any);return d.toArray().map(x=>x.toFixed(2)).join(',')})(), 'tiptop', pl.swordTip.y.toFixed(2), 'tau', pl.feet.hipTorqueTarget.x.toFixed(0)+'/'+pl.feet.hipTorque.x.toFixed(0), 'hand', pl.gripLocal.toArray().map((x) => x.toFixed(2)).join(','));
+        'feet', pl.feet.feet.map((f: any) => f.phase[0] + (f.inContact ? '+' : '-')).join(''), 'hold', pl.holding, 'sd', (()=>{const d=new THREE.Vector3(0,1,0).applyQuaternion(pl.sword.rotation() as any);return d.toArray().map(x=>x.toFixed(2)).join(',')})(), 'tiptop', pl.swordTip.y.toFixed(2), 'tau', pl.feet.hipTorqueTarget.x.toFixed(0)+'/'+pl.feet.hipTorque.x.toFixed(0), 'drv', pl.feet.driveVel.x.toFixed(2), 'Ft', pl.feet.lastFt.x.toFixed(0), 'N', pl.feet.totalN.toFixed(0), 'slip', pl.feet.feet.map((f: any) => f.points.map((q: any) => q.state[1]).join('')).join('|'), 'gaitV', (pl.gait as any).vDrive.x.toFixed(2), 'lean', ((pl.gait as any).leanShiftScale), 'cap', (pl.gait as any).capture.x.toFixed(2));
     }
   }, {}, {}, (sb) => { const gm = new GoblinManager(sb.pw, sb.tun); gm.spawn(target, 'none', Math.PI, true); sb.pw.hooks.push({ pre: (dt) => gm.pre(dt, new THREE.Vector3(0, 0, -50), () => false), post: () => {} }); });
 });

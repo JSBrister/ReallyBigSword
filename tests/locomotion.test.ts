@@ -24,7 +24,7 @@ describe('balance, toppling and spinning', () => {
   });
 
   it('a sustained hard horizontal swing on stone slips the feet and spins the body the other way', async () => {
-    const { player, run, cmd, pw } = await makeSandbox({}, { swordDir: new THREE.Vector3(0, 0, 1) });
+    const { player, run, cmd, pw } = await makeSandbox({ swordLength: 2.8 }, { swordDir: new THREE.Vector3(0, 0, 1) });
     let slipTime = 0, bodyYawRate = 0, swordYawRate = 0, n = 0;
     cmd.effort.set(-1, 0); // full effort counter-clockwise seen from above (left)
     run(0.8, (t) => {

@@ -19,7 +19,7 @@ export class Hud {
       </div>
       <div data-room style="position:absolute;right:16px;top:14px;text-align:right;max-width:46vw;text-shadow:0 1px 3px #000"></div>
       <div data-msg style="position:absolute;left:0;right:0;top:34%;text-align:center;font-size:42px;font-weight:800;letter-spacing:.04em;text-shadow:0 2px 8px #000;opacity:0;transition:opacity .3s"></div>
-      <div style="position:absolute;left:16px;bottom:12px;font-size:12px;opacity:.75;text-shadow:0 1px 2px #000">WASD walk · hold Space / LMB (pad A) READY: walk at a dummy and he chops · F (pad B) chop where you stand · T free-swing controls · RMB orbit · R restart · Esc pause · F1 debug</div>
+      <div style="position:absolute;left:16px;bottom:12px;font-size:12px;opacity:.75;text-shadow:0 1px 2px #000">WASD walk · hold Space / LMB (pad A) READY: walk at a dummy and he chops · F (pad B) chop where you stand · hold Q/E spin (experimental) · T free-swing controls · RMB orbit · R restart · Esc pause · F1 debug</div>
       <div data-pause style="position:absolute;inset:0;z-index:50;background:rgba(10,8,14,.78);display:none;pointer-events:auto;align-items:center;justify-content:center">
         <div style="max-width:820px;padding:24px 30px;background:#1b1622;border:1px solid #4a3d5c;border-radius:10px;line-height:1.5">
           <h1 style="margin:0 0 4px;font-size:30px">Really Big Sword</h1>
@@ -31,6 +31,7 @@ export class Hud {
             <tr><td colspan="3" style="padding-top:6px;opacity:.85"><i>Technique controls (default)</i></td></tr>
             <tr><td><b>READY</b></td><td>hold Space or LMB: walk at a dummy, he squares up, stops and lets the blade fall on it, then lets go and heaves it back up</td><td>hold A or RT</td></tr>
             <tr><td><b>Chop here</b></td><td>F</td><td>B</td></tr>
+            <tr><td><b>Spin (experimental)</b></td><td>hold Q / E: he chokes up to the balance point, lays the blade down, turns it crosswise and spins left / right. He usually falls over doing it so far.</td><td>hold LB / RB</td></tr>
             <tr><td><b>Switch controls</b></td><td>T (to the free-swing controls below and back)</td><td></td></tr>
             <tr><td colspan="3" style="padding-top:6px;opacity:.85"><i>Free-swing controls</i></td></tr>
             <tr><td><b>Swing</b></td><td>arrows or IJKL · or hold LMB + drag</td><td>face buttons (Y up, A down, X left, B right) · or right stick</td></tr>

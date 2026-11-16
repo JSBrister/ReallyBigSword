@@ -183,6 +183,14 @@ Prefer vitest experiments with `makeSandbox()` for anything about the hero alone
 - The hand force on a shallow, leaning sword is ladder-like (≈2 kN horizontal, near the feet's friction limit). This is what makes every grip-held recovery marginal.
 - (FIXED in round 7, see README) EMPTY-HANDED HE COULD NOT STAND: with 90 kg on the feet the centre-of-pressure shift gives the hips only ≈200 N·m; the body COM is only 0.11 m above the hip pivot, so its inertia is tiny and `hipDamping` 2500 is at the edge of explicit stability at 480 Hz. After `release()` he leans 10–45° and runs off at up to 5 m/s. Any design where he lets go of the sword needs this fixed first (`tools/experiments/empty.exp.ts`).
 - `balanceOnCom` = 1 is wrong when the load hangs near hip height: the hip→COM line is then far from vertical and the hips get asked for 6–8 kN·m.
+- Round 8 (spin attempts, 3.4 m sword):
+  - A spinning, steep blade is a huge lever (its COM ~2 m up, off-axis): spin fast only once the blade is low.
+  - Lowering short of the balance point puts the system COM past the edge of his narrow stance (feet ±0.17 m) almost at once; a fixed torque budget does not work because his lean adds to the overhang. Steer the lowering by the measured COM drift (`balanceDrift()`) instead.
+  - Sliding the grip fast (>0.2 m/s) up the blade pitches him; easing the start/stop did not help.
+  - Pose targets relative to the torso make the torso's lean swing 150 kg: give heavy-load poses in the heading frame (`poseInHeading`).
+  - Sideways balance is his weakest axis; fore-aft (long feet) is much better: lower forward, then turn crosswise.
+  - Empty-handed runaway sideways came from `leanFootShift` while moving (faded out by speed now); a stance-locked chop/follow with empty hands also cannot recover (holdGround only while holding).
+  - Open: he still rocks and falls while holding the sword overhead during the grip slide. Next idea: widen the stance before the slide (step out), or slide with the sword lowered forward to ~70° first.
 - When a change makes several things worse at once, revert it and change one knob at a time, re-running `walk2.exp.ts` and `npm test` after each.
 
 ## 9. Progress

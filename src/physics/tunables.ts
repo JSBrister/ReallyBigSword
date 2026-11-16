@@ -34,18 +34,26 @@ export interface Tunables {
   gripSlideSpeed: number; // m/s the hand slides along the sword
   anchorSpeed: number; // m/s the hands move relative to the body
   carrySpeed: number; // m/s walking with the sword on the shoulder
-  chopRange: number; // m: furthest target the armed chop goes off at
-  chopMin: number; // m: nearest
+  chopRange: number; // furthest target the armed chop goes off at, as a fraction of swordLength
+  chopMin: number; // nearest, as a fraction of swordLength
   chopNudge: number; // N·m, the push that starts the blade falling
   chopNudgeTime: number; // s
+  spinRate: number; // rad/s the spin builds up to (friction permitting)
+  spinAccel: number; // rad/s^2 how fast the feet try to speed the spin up (friction limits the real rate)
+  spinLowerRate: number; // rad/s the blade is lowered while spinning
+  spinElevation: number;
+  spinLeverTorque: number;
+  spinComMargin: number; // m: how far the system COM may drift from the middle of his feet while he lowers the blade // N·m: the off-balance weight the blade may put on him while it is lowered // rad above horizontal the blade ends up at in a full spin
   raiseRate: number; // rad/s lifting the sword back upright (held at its balance point)
   balanceLever: number; // m above the hips of the point the leg drive follows (technique mode)
   walkDecel: number; // m/s^2, how hard the legs brake
+  walkDecelEmpty: number; // m/s^2, the same with nothing in his hands (no top-heavy load to pitch over)
   driveOverspeed: number; // leg sweep may exceed the commanded speed by this factor (balance)
   walkSpeed: number; // m/s commanded
   walkAccel: number; // m/s^2, how fast the commanded leg sweep may change
   stanceLimitedAccel: boolean; // cap leg acceleration by what the stance can balance (L·a/g inside the feet)
-  leanFootShift: number; // m of foot placement against the torso lean, per unit sin(lean)
+  leanFootShift: number;
+  leanShiftFadeSpeed: number; // m/s at which leanFootShift has faded out // m of foot placement against the torso lean, per unit sin(lean)
   torqueStepDeficit: number; // N·m of undeliverable hip torque that makes him re-place a foot
   minWalkAccel: number; // m/s^2, floor for that cap (so he can always get going)
   standUpDelay: number; // s on the floor before he is put back on his feet (explicit rule)
@@ -89,7 +97,7 @@ export interface Tunables {
 export const defaultTunables: Tunables = {
   warriorMass: 90,
   swordMass: 150,
-  swordLength: 2.8,
+  swordLength: 3.4,
   legLength: 0.95,
 
   muStatic: 0.9,
@@ -114,18 +122,26 @@ export const defaultTunables: Tunables = {
   gripSlideSpeed: 1.5,
   anchorSpeed: 1.5,
   carrySpeed: 2.0,
-  chopRange: 2.0,
-  chopMin: 1.3,
+  chopRange: 0.71,
+  chopMin: 0.46,
   chopNudge: 300,
   chopNudgeTime: 0.8,
+  spinRate: 3.5,
+  spinAccel: 2.5,
+  spinLowerRate: 0.5,
+  spinElevation: 0.2,
+  spinLeverTorque: 450,
+  spinComMargin: 0.08,
   raiseRate: 0.5,
   balanceLever: 0.1,
   walkDecel: 4,
+  walkDecelEmpty: 4,
   driveOverspeed: 1.05,
   walkSpeed: 1.6,
   walkAccel: 4,
   stanceLimitedAccel: false,
   leanFootShift: 1,
+  leanShiftFadeSpeed: 2.5,
   torqueStepDeficit: 1e9,
   minWalkAccel: 0.8,
   turnRate: 2.5,

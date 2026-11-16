@@ -16,16 +16,20 @@ import type { Player, PlayerCommand } from './player';
 import { q4, v3 } from '../mathUtil';
 import { GEOM } from './geometry';
 
-export type TechniqueState = 'carry' | 'charge' | 'set' | 'chop' | 'follow' | 'approach' | 'pickup' | 'lift' | 'raise' | 'lower' | 'spinUp' | 'spin' | 'release' | 'plant' | 'recover';
+export type TechniqueState = 'carry' | 'charge' | 'set' | 'chop' | 'follow' | 'approach' | 'pickup' | 'lift' | 'raise' | 'lower' | 'spinUp' | 'spin' | 'spinDown' | 'plant' | 'recover';
 
 /** Body frame: +Z forward, +Y up, -X is his right. */
 export const CARRY_ANCHOR = new THREE.Vector3(0, 0.45, 0.4); // in front of the chest
 /** Where the deadlift brings the hands (sword held at its balance point): chest height, close in. */
 export const LIFT_ANCHOR = new THREE.Vector3(0, 0.45, Number(process.env.LIFT_Z ?? 0.12));
+/** Where the hands hold the sword at its balance point while spinning: low, close in front of the hips. */
+export const SPIN_ANCHOR = new THREE.Vector3(0, 0.05, 0.3);
+/** ...and as high as head height while the blade is still steep (pommel clearance). */
+export const SPIN_HIGH = new THREE.Vector3(0, 1.0, 0.2); // overhead
 /** How far in front of the hips he stands from the point he picks the sword up at (m). */
 const PICKUP_REACH = 0.45;
 /** Experiment hook: alternative carry stance (pose, grip position, anchor). */
-export const EXP = { chopDraw: Number(process.env.CHOP_DRAW ?? 0), raiseHands: Number(process.env.RAISE_HANDS ?? 0.4), liftFree: process.env.LIFT_FREE !== '0', chopHold: process.env.CHOP_HOLD !== '0', releaseAt: Number(process.env.RELEASE_AT ?? 1), emptyWalk: false, releaseOnStrike: true, followHold: true, regripWalk: 1, planted: { com: 0, anchor: null as THREE.Vector3 | null } };
+export const EXP = { spinHeading: process.env.SPIN_BODY !== '1', spinW0: Number(process.env.SPIN_W0 ?? 0), spinHandZ: Number(process.env.SPIN_Z ?? 0.25), spinSlide: Number(process.env.SPIN_SLIDE ?? 0.12), slideAccel: Number(process.env.SLIDE_ACC ?? 5), chopDraw: Number(process.env.CHOP_DRAW ?? 0), raiseHands: Number(process.env.RAISE_HANDS ?? 0.4), liftFree: process.env.LIFT_FREE !== '0', chopHold: process.env.CHOP_HOLD !== '0', releaseAt: Number(process.env.RELEASE_AT ?? 0.3), emptyWalk: false, releaseOnStrike: true, followHold: true, regripWalk: 1, planted: { com: 0, anchor: null as THREE.Vector3 | null } };
 export const CARRY = { pose: new THREE.Quaternion() as THREE.Quaternion | null, grip: 0 as number | null };
 const UPV = new THREE.Vector3(0, 1, 0);
 const dirPose = (x: number, y: number, z: number) =>
@@ -34,6 +38,8 @@ const POSE_LEVEL_FWD = dirPose(0, 0, 1);
 
 export interface TechniqueOutput {
   pose: THREE.Quaternion;
+  /** The pose is in the heading frame (world vertical, turning with his heading), not the torso's. */
+  poseInHeading: boolean;
   poseRate: number;
   gripAlong: number;
   slideSpeed: number;
@@ -69,8 +75,15 @@ export class TechniqueController {
   /** Heading of the current charge (rad). */
   heading = 0;
   private inRangeT = 0;
+  /** Spin: commanded yaw rate of the planted legs (rad/s), its direction, and the blade's elevation target. */
+  private spinW = 0;
+  private slideV = 0;
+  private dtLast = 1 / 480;
+  private spinSign = 1;
+  private spinElev = Math.PI / 2;
+  private spinCross = 0;
   readonly out: TechniqueOutput = {
-    pose: POSE_LEVEL_FWD.clone(), poseRate: 2, gripAlong: 0, slideSpeed: 1.5, anchor: CARRY_ANCHOR.clone(), anchorSpeed: 1.5,
+    pose: POSE_LEVEL_FWD.clone(), poseInHeading: false, poseRate: 2, gripAlong: 0, slideSpeed: 1.5, anchor: CARRY_ANCHOR.clone(), anchorSpeed: 1.5,
     free: false, effort: new THREE.Vector3(), support: 1, swordLoad: 1, loadAtGrip: false, moveVel: new THREE.Vector3(), face: null, twist: null, brace: 0, allowJump: true, holdGround: false, balanceOnCom: null,
   };
 
@@ -79,6 +92,34 @@ export class TechniqueController {
   }
 
   private go(s: TechniqueState): void { this.state = s; this.t = 0; }
+
+  /** Spin sword pose (body frame): lowered forward (his fore-aft balance is far better than his
+   *  sideways balance) to `elev` above horizontal, then, once low, turned crosswise in front of
+   *  him (`cross` 0..1), which at the balance point costs no balance at all. */
+  private sidePose(elev: number, cross = this.spinCross): THREE.Quaternion {
+    const side = -this.spinSign, psi = cross * Math.PI / 2;
+    return new THREE.Quaternion().setFromUnitVectors(UPV,
+      new THREE.Vector3(side * Math.sin(psi) * Math.cos(elev), Math.sin(elev), Math.cos(psi) * Math.cos(elev)));
+  }
+
+  /** Spin grip: hands from the chest (blade up) down to the hips (blade level), and as far up the
+   *  blade toward its balance point as keeps the pommel off the floor. */
+  private spinGrip(o: TechniqueOutput, p: Player, sdir: THREE.Vector3): void {
+    // Hands as high as it takes for the pommel to clear the floor with the sword held at its
+    // balance point (overhead while it is upright), coming down to the hips as it is laid down.
+    const needH = 0.12 + (this.balance + GEOM.pommel) * Math.max(0, Math.sin(this.spinElev)); // m above the floor
+    const y = THREE.MathUtils.clamp(needH - 0.95, SPIN_ANCHOR.y, SPIN_HIGH.y);
+    o.anchor.set(0, y, EXP.spinHandZ); o.anchorSpeed = this.tun.anchorSpeed * 0.6;
+    // the grip works up toward the balance point as fast as the hands' height lets the pommel clear
+    const gripH = p.gripPoint().y - (p.feet.cop.y || 0);
+    o.gripAlong = THREE.MathUtils.clamp((gripH - 0.08) / Math.max(sdir.y, 0.05) - GEOM.pommel, 0, this.balance);
+    // Smoothly: 150 kg sliding through his hands, started or stopped abruptly, pitches him about
+    // the hips. Ease in and out (bounded acceleration) instead.
+    const d = Math.abs(o.gripAlong - p.gripAlong);
+    const vWant = Math.min(this.tun.gripSlideSpeed * EXP.spinSlide, Math.sqrt(2 * EXP.slideAccel * d));
+    this.slideV = THREE.MathUtils.clamp(vWant, this.slideV - EXP.slideAccel * this.dtLast, this.slideV + EXP.slideAccel * this.dtLast);
+    o.slideSpeed = this.slideV;
+  }
 
   /** Upright and not swaying: the only state he starts a heavy move from. */
   private steady(p: Player, tilt = 0.08, w = 0.3): boolean {
@@ -94,7 +135,7 @@ export class TechniqueController {
 
   update(dt: number, cmd: PlayerCommand, p: Player): TechniqueOutput {
     const tun = this.tun, o = this.out;
-    this.t += dt;
+    this.t += dt; this.dtLast = dt;
     const yaw = p.feet.frameYaw;
     const vel = v3(p.body.linvel());
     const speed = Math.hypot(vel.x, vel.z);
@@ -102,7 +143,7 @@ export class TechniqueController {
     const moveYaw = moveMag > 0.1 ? Math.atan2(cmd.move.x, cmd.move.z) : null;
 
     // defaults: the Carry stance
-    o.pose.copy(CARRY.pose ?? POSE_LEVEL_FWD); o.poseRate = 2.5;
+    o.pose.copy(CARRY.pose ?? POSE_LEVEL_FWD); o.poseRate = 2.5; o.poseInHeading = false;
     o.gripAlong = CARRY.grip ?? this.balance; o.slideSpeed = tun.gripSlideSpeed;
     o.anchor.copy(CARRY_ANCHOR); o.anchorSpeed = tun.anchorSpeed;
     o.free = false; o.effort.set(0, 0, 0); o.support = 1; o.swordLoad = 1; o.loadAtGrip = false;
@@ -121,7 +162,8 @@ export class TechniqueController {
 
     switch (this.state) {
       case 'carry':
-        if (cmd.charge) this.go('charge');
+        if (cmd.spin && this.steady(p, 0.12, 0.5)) { this.spinSign = cmd.spinDir >= 0 ? 1 : -1; this.spinW = 0; this.spinElev = Math.PI / 2; this.spinCross = 0; this.go('spinUp'); }
+        else if (cmd.charge) this.go('charge');
         else if (cmd.drop) this.go('set');
         break;
 
@@ -130,8 +172,9 @@ export class TechniqueController {
         // in reach and he has all but stopped (he cannot chop on the run without going over);
         // letting go of the button chops as soon as he has stopped.
         o.allowJump = false;
-        const inRange = p.targetAhead > tun.chopMin && p.targetAhead < tun.chopRange;
-        const ideal = (tun.chopMin + tun.chopRange) / 2;
+        const cMin = tun.chopMin * tun.swordLength, cMax = tun.chopRange * tun.swordLength;
+        const inRange = p.targetAhead > cMin && p.targetAhead < cMax;
+        const ideal = (cMin + cMax) / 2;
         const toT = new THREE.Vector3(Math.sin(p.targetBearing), 0, Math.cos(p.targetBearing));
         const pullingAway = moveMag > 0.3 && cmd.move.x * toT.x + cmd.move.z * toT.z < -0.3;
         if (p.targetAhead < 4.5 && !pullingAway) {
@@ -160,7 +203,7 @@ export class TechniqueController {
         // stops carrying its weight: pushing harder would just throw him backwards.
         o.free = true; o.support = 0;
         // until it is really falling it is still his to balance
-        o.swordLoad = sdir.dot(fwd) < 0.3 ? 1 : 0.15;
+        o.swordLoad = !p.holding ? 0 : sdir.dot(fwd) < 0.3 ? 1 : 0.15; // (nothing, once he has let go)
         // push until it is clearly going over (it may start out leaning back if he is running)
         if (sdir.dot(fwd) < 0.3 && this.t < tun.chopNudgeTime) o.effort.copy(rightAxis).multiplyScalar(-tun.chopNudge);
         // and tip it like a balanced broom: draw the hands back under it, so it falls forward
@@ -170,7 +213,7 @@ export class TechniqueController {
         if (EXP.releaseAt < 1 && p.holding && sdir.dot(fwd) > EXP.releaseAt) p.release();
         o.face = this.heading;
         o.moveVel.set(Math.sin(this.heading), 0, Math.cos(this.heading)).multiplyScalar(0);
-        o.allowJump = false; o.brace = 1; o.holdGround = EXP.chopHold;
+        o.allowJump = false; o.brace = p.holding ? 1 : 0; o.holdGround = EXP.chopHold && p.holding;
         if (p.swordTip.y < 0.45 || (this.t > 0.15 && p.swordTouching) || this.t > 1.5) {
           // it has struck: let go, or the blade stopping dead would yank him over with it
           if (EXP.releaseOnStrike) p.release();
@@ -183,8 +226,10 @@ export class TechniqueController {
         // no more push: the blade finishes on its own momentum and comes to rest
         // whatever the blade is not resting on hangs from his hands
         o.free = true; o.support = 0; o.swordLoad = !p.holding ? 0 : p.swordTouching ? p.handShare() : 0.15; o.loadAtGrip = true;
-        o.face = this.heading; o.moveVel.set(0, 0, 0); o.holdGround = EXP.followHold; this.planted();
-        o.allowJump = false; o.brace = 1;
+        // (empty-handed he lets his heading go while he finds his feet: holding a heading while
+        // catching a sideways drift turns it into a runaway sidestep)
+        o.face = p.holding ? this.heading : null; o.moveVel.set(0, 0, 0); o.holdGround = EXP.followHold && p.holding; this.planted();
+        o.allowJump = false; o.brace = p.holding ? 1 : 0;
         const rel = p.holding ? v3(p.sword.angvel()).sub(v3(p.body.angvel())).length() : v3(p.sword.angvel()).length() + v3(p.sword.linvel()).length();
         // wait until it has really come to rest on the floor and he is steady
         const down = p.swordTip.y - (p.feet.cop.y || 0) < 0.3;
@@ -202,12 +247,12 @@ export class TechniqueController {
         const hip = v3(p.body.translation());
         const to = new THREE.Vector3(b.x - hip.x, 0, b.z - hip.z);
         const dist = to.length(); to.normalize();
-        o.face = Math.atan2(to.x, to.z);
+        o.face = speed < 0.4 ? Math.atan2(to.x, to.z) : null; // square up to it once slow
         const err = dist - PICKUP_REACH;
         o.moveVel.copy(to).multiplyScalar(Math.abs(err) < 0.08 ? 0 : THREE.MathUtils.clamp(1.2 * err, -0.4, 0.6));
         o.allowJump = false;
-        const facing = Math.abs(Math.atan2(Math.sin(o.face - yaw), Math.cos(o.face - yaw))) < 0.2;
-        if (EXP.emptyWalk) { o.moveVel.set(cmd.move.x, 0, cmd.move.z).multiplyScalar(tun.carrySpeed); o.face = moveYaw; break; }
+        const fy = Math.atan2(to.x, to.z); const facing = Math.abs(Math.atan2(Math.sin(fy - yaw), Math.cos(fy - yaw))) < 0.2;
+        if (EXP.emptyWalk) { o.moveVel.set(cmd.move.x, 0, cmd.move.z).multiplyScalar(tun.carrySpeed); o.face = process.env.FACE0 ? 0 : moveYaw; break; }
         if (Math.abs(err) < 0.15 && facing && speed < 0.3 && this.t > 0.3) this.go('pickup');
         break;
       }
@@ -259,6 +304,56 @@ export class TechniqueController {
         o.moveVel.multiplyScalar(0.5);
         o.allowJump = false;
         if ((p.gripAlong < 0.02 && this.steady(p)) || this.t > 4) this.go('carry');
+        break;
+      }
+
+      case 'spinUp': {
+        // brace and start the twist; the rest happens in 'spin'
+        this.spinGrip(o, p, sdir);
+        o.moveVel.set(0, 0, 0); o.face = null; o.allowJump = false; o.brace = 0.5;
+        if (!cmd.spin) { this.go('lower'); break; }
+        if (this.t > 0.2) this.go('spin');
+        break;
+      }
+
+      case 'spin': {
+        // The planted feet twist him round (friction limits how hard), and the blade is laid down
+        // sideways only as the spin builds: lowering it multiplies the inertia the feet must turn.
+        // The hands work up toward the balance point as far as the pommel's clearance of the floor
+        // allows, and come down in front of the hips as the blade comes down.
+        this.spinGrip(o, p, sdir);
+        o.moveVel.set(0, 0, 0); o.face = null; o.allowJump = false; o.brace = 1;
+        // Lower the blade only as fast as he stays balanced: watch where the whole system's centre
+        // of mass is over his feet and lift it back a little if it drifts toward their edge.
+        // (Held at its balance point it costs nothing; short of it, the overhang is a lever on him.)
+        const drift = p.balanceDrift();
+        if (drift > tun.spinComMargin) this.spinElev = Math.min(Math.PI / 2, this.spinElev + tun.spinLowerRate * dt);
+        else if (drift < tun.spinComMargin * 0.6) this.spinElev = Math.max(tun.spinElevation, this.spinElev - tun.spinLowerRate * dt);
+        // once it is low and held at its balance point, turn it crosswise
+        const ready = this.spinElev < 0.5 && Math.abs(this.balance - p.gripAlong) < 0.1;
+        this.spinCross = THREE.MathUtils.clamp(this.spinCross + (ready ? 1 : -1) * 0.6 * dt, 0, 1);
+        // ...and only spin fast once it is low: a steep blade spun fast is a huge lever on him
+        const low = this.spinCross; // (spin up only as it comes crosswise)
+        const wTarget = EXP.spinW0 + (tun.spinRate - EXP.spinW0) * low;
+        this.spinW = Math.min(wTarget, this.spinW + tun.spinAccel * dt);
+        if (process.env.SPIN_NOTWIST) this.spinW = 0;
+        o.twist = this.spinSign * this.spinW;
+        o.holdGround = this.spinW < 0.3; // planted while the blade comes down; turning needs steps
+        o.pose.copy(this.sidePose(this.spinElev)); o.poseRate = 3; o.poseInHeading = EXP.spinHeading;
+        if (!cmd.spin) this.go('spinDown');
+        break;
+      }
+
+      case 'spinDown': {
+        // let the feet brake the spin while the blade comes back upright
+        this.spinGrip(o, p, sdir);
+        o.moveVel.set(0, 0, 0); o.face = null; o.allowJump = false; o.brace = 0.5;
+        this.spinW = Math.max(0, this.spinW - tun.spinAccel * dt);
+        o.twist = this.spinSign * this.spinW;
+        this.spinCross = Math.max(0, this.spinCross - 0.6 * dt);
+        if (this.spinCross === 0) this.spinElev = Math.min(Math.PI / 2, this.spinElev + tun.spinLowerRate * dt);
+        o.pose.copy(this.sidePose(this.spinElev)); o.poseRate = 3; o.poseInHeading = EXP.spinHeading;
+        if ((this.spinW === 0 && this.spinElev >= Math.PI / 2 - 1e-3 && Math.abs(p.body.angvel().y) < 0.3) || this.t > 5) this.go('lower');
         break;
       }
 

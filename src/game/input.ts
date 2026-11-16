@@ -27,6 +27,7 @@ export class Input {
   techMode = true;
   private dropPressed = false;
   private readyHeld = false;
+  private spinPad = 0;
   /** Pixels per second of mouse drag that count as a full-strength swing. */
   dragFullSpeed = 700;
   /** What the right stick does: swing the sword, or orbit the camera. */
@@ -136,6 +137,8 @@ export class Input {
       if (edge(5) && !this.techMode) this.jumpPressed = true;
       if (this.techMode && edge(1)) this.dropPressed = true;
       if (this.techMode && (b(0) || b(7))) this.readyHeld = true;
+      if (this.techMode && b(4)) this.spinPad = 1;
+      if (this.techMode && b(5)) this.spinPad = -1;
       reachKey += (b(12) ? 1 : 0) - (b(13) ? 1 : 0);
       if (b(14)) this.orbitDelta.x -= 500 * dt;
       if (b(15)) this.orbitDelta.x += 500 * dt;
@@ -164,6 +167,11 @@ export class Input {
     // technique controls: hold READY (Space / left mouse / pad A or RT), F / pad B puts it down
     out.charge = this.techMode && (k.has('Space') || this.dragging || this.readyHeld);
     this.readyHeld = false;
+    // spin (experimental): hold Q / pad LB to spin to the left, E / pad RB to the right
+    const spinKey = (k.has('KeyQ') ? 1 : 0) - (k.has('KeyE') ? 1 : 0) || this.spinPad;
+    this.spinPad = 0;
+    out.spin = this.techMode && spinKey !== 0;
+    if (spinKey !== 0) out.spinDir = spinKey;
     out.drop = this.techMode && this.dropPressed;
     this.dropPressed = false;
     out.jump = out.jump || this.jumpPressed;
