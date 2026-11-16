@@ -116,6 +116,7 @@ There are also walking and jumping checks.
 
 ## What feels wrong / open problems
 
+- **Fixed: spinning on the floor after a fall.** Lying tipped over, part of the legs' get-up torque landed along his spine (his lightest axis, ~4 kg·m²) and spun him at up to 11 rad/s; empty-handed it also hurled him into cartwheels, and the tumbling kept resetting the stand-up timer. Now, while he is down, the legs pass no torque about his spine, their get-up torque is capped at 30%, and the stand-up timer only resets after 0.5 s of being upright. Peak yaw rate in a full in-game chop session dropped from 11.6 to 3.2 rad/s.
 - **Technique mode is not reliable yet.** In 20 s READY sessions against four dummy positions, the full chop → pick up → raise cycle completes on some and he still falls on others (usually just after the strike, or during the chop on oblique targets); the stand-up rule then puts him back with the sword. Measured with `npm run exp -- tools/experiments/chopfall.exp.ts` and `ready.exp.ts`. Spin, plant and drag are not implemented in technique mode yet.
 
 **Update (controls rework):** with effort-based controls at 2 kN·m, the balance reflex, and bracing without the split stance, a standing slam on a target about 1.4 m away lands at 7–7.5 m/s and he stays up. A slam that misses and hits the floor, a sweep, or a long spin still usually topples him. The automatic stand-up then puts him back on his feet. The original analysis below still describes why.

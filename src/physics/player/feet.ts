@@ -436,8 +436,16 @@ export class FootSystem {
     const M = new THREE.Vector3(-d.z * Ntot, 0, d.x * Ntot).add(new THREE.Vector3(-Ft.z, 0, Ft.x).multiplyScalar(L));
     // the hips can only carry so much: never pass on more tilting torque than their strength
     const hm = M.length();
-    const hipMax = tun.hipMaxTorque * this.hipStrengthScale;
+    // tipped over, the legs only help him back up; they cannot hurl the body about
+    const hipMax = tun.hipMaxTorque * this.hipStrengthScale * (this.followsBody ? 1 : 0.3);
     if (hm > hipMax) M.multiplyScalar(hipMax / hm);
+    // Lying tipped over, the hips twist freely (see updateFrame): the legs cannot torque him about
+    // his own spine either. Without this, part of the getting-up torque lands on his slim long
+    // axis and spins him like a top on the floor.
+    if (!this.followsBody) {
+      const bodyUp = new THREE.Vector3(0, 1, 0).applyQuaternion(q4(body.rotation()));
+      M.addScaledVector(bodyUp, -M.dot(bodyUp));
+    }
     this.hipTorque.copy(M);
     M.y += Myaw;
 

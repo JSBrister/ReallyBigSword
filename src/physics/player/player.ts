@@ -98,6 +98,7 @@ export class Player implements ActuatedBodies {
   readonly swingCmd = new THREE.Vector3();
   /** Seconds the warrior has been toppled (legs out of reach of the ground). */
   fallenTime = 0;
+  private uprightTime = 0;
   /** Seconds since he was last on the floor (the grip returns the sword to rest meanwhile). */
   private sinceUp = 99;
   /** Set by tests to bypass input mapping and command the sword in world frame directly. */
@@ -491,8 +492,11 @@ export class Player implements ActuatedBodies {
     this.gripWorld.copy(this.gripLocal).applyQuaternion(q4(this.torso.rotation())).add(v3(this.torso.translation()));
     this.swordAct.measure(this, this.gripWorld, dt);
     // (hysteresis: rolling about on the floor near the 60° line must not keep resetting it)
+    // (and tumbling through upright for a moment does not count as being up)
     const upY = new THREE.Vector3(0, 1, 0).applyQuaternion(q4(this.body.rotation())).y;
-    this.fallenTime = this.fallen || (this.fallenTime > 0 && upY < 0.8) ? this.fallenTime + dt : 0;
+    this.uprightTime = upY > 0.8 && !this.fallen ? this.uprightTime + dt : 0;
+    if (this.fallen || (this.fallenTime > 0 && this.uprightTime < 0.5)) this.fallenTime += dt;
+    else this.fallenTime = 0;
     // Explicit, visible game rule (not a force): if the legs have not got him up after a while,
     // he is put back on his feet where he lies. Reported in the README as a deviation.
     if (this.autoStandUp && this.fallenTime > this.tun.standUpDelay) this.standUpInPlace();
