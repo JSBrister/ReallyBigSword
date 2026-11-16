@@ -31,6 +31,17 @@ export interface Tunables {
   reachSpeed: number; // m/s grip slide speed
 
   // --- locomotion ---
+  gripSlideSpeed: number; // m/s the hand slides along the sword
+  anchorSpeed: number; // m/s the hands move relative to the body
+  carrySpeed: number; // m/s walking with the sword on the shoulder
+  chopRange: number; // m: furthest target the armed chop goes off at
+  chopMin: number; // m: nearest
+  chopNudge: number; // N·m, the push that starts the blade falling
+  chopNudgeTime: number; // s
+  raiseRate: number; // rad/s lifting the sword back upright (held at its balance point)
+  balanceLever: number; // m above the hips of the point the leg drive follows (technique mode)
+  walkDecel: number; // m/s^2, how hard the legs brake
+  driveOverspeed: number; // leg sweep may exceed the commanded speed by this factor (balance)
   walkSpeed: number; // m/s commanded
   walkAccel: number; // m/s^2, how fast the commanded leg sweep may change
   standUpDelay: number; // s on the floor before he is put back on his feet (explicit rule)
@@ -41,6 +52,7 @@ export interface Tunables {
   maxStepLength: number; // m, from hip
   maxFootSpeed: number; // m/s swing foot speed limit
   hipMaxTorque: number; // N·m, strongest tilting torque the hips/legs can put on the torso
+  balanceOnCom: number; // 0..1: balance the torso (0) or the whole system COM (1) over the hips
   hipStiffness: number; // N·m/rad, keeping the torso upright on the legs
   hipDamping: number; // N·m·s/rad
   jumpForce: number; // N total extra leg thrust during push
@@ -94,6 +106,17 @@ export const defaultTunables: Tunables = {
   swordFreeDamping: 250,
   reachSpeed: 1.6,
 
+  gripSlideSpeed: 1.5,
+  anchorSpeed: 1.5,
+  carrySpeed: 2.0,
+  chopRange: 2.0,
+  chopMin: 1.3,
+  chopNudge: 600,
+  chopNudgeTime: 0.8,
+  raiseRate: 1.5,
+  balanceLever: 0.1,
+  walkDecel: 4,
+  driveOverspeed: 1.05,
   walkSpeed: 1.6,
   walkAccel: 4,
   turnRate: 2.5,
@@ -104,6 +127,7 @@ export const defaultTunables: Tunables = {
   maxStepLength: 0.85,
   maxFootSpeed: 6,
   hipMaxTorque: 4000,
+  balanceOnCom: 0,
   hipStiffness: 20000,
   hipDamping: 2500,
   jumpForce: 14000,

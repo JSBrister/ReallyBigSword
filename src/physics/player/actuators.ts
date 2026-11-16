@@ -94,10 +94,16 @@ export class SwordActuator {
 
   /** 0..1 strength multiplier chosen by the controller (relaxed grip while toppled). */
   strength = 1;
+  /** 0..1 how much of the sword's weight the arms carry in free mode (0 = let it fall). */
+  support = 1;
   /** The blade is touching something (set by the player each substep). */
   resting = false;
   /** rad/s at which an idle grip returns the sword to its rest pose (0 = just hold). */
   restRate = 0;
+  /** Body-relative sword pose to move to in hold mode (technique controller), or null. */
+  poseTarget: THREE.Quaternion | null = null;
+  /** rad/s the hold target moves toward poseTarget. */
+  poseRate = 0;
 
   /** 'hold': joint motors hold/drive the relative pose. 'free': an explicit torque pair. */
   mode: 'hold' | 'free' = 'hold';
@@ -140,7 +146,7 @@ export class SwordActuator {
       const sl = support.length();
       const down = sl > 1e-6 && e > 1e-6 ? Math.max(0, -effort.dot(support) / (sl * e)) : 0;
       // while the blade rests on something, that thing carries part of the weight
-      tau.addScaledVector(support, (1 - down * Math.min(1, e / 3000)) * (this.resting ? 0.3 : 1));
+      tau.addScaledVector(support, (1 - down * Math.min(1, e / 3000)) * (this.resting ? 0.3 : 1) * this.support);
     }
     tau.addScaledVector(wRel, -tun.swordFreeDamping);
     const max = tun.swordMaxTorque * this.strength;
@@ -188,7 +194,9 @@ export class SwordActuator {
       // relaxed: let the sword settle where it lies instead of holding the old pose
       this.qTarget.slerp(tqRel, 1 - this.strength);
     }
-    if (this.restRate > 0 && cmdWorld.lengthSq() < 1e-6) {
+    if (this.poseTarget) {
+      this.qTarget.rotateTowards(this.poseTarget, this.poseRate * dt);
+    } else if (this.restRate > 0 && cmdWorld.lengthSq() < 1e-6) {
       // bring the sword back to its rest pose (upright in front) at a limited rate
       this.qTarget.rotateTowards(REST, this.restRate * dt);
     }
@@ -224,6 +232,11 @@ export class SwordActuator {
 /** Reach: slide the grip anchor along the torso forward axis at limited speed. */
 export function applyReach(b: ActuatedBodies, gripLocal: THREE.Vector3): void {
   b.gripJoint.setAnchor1({ x: gripLocal.x, y: gripLocal.y, z: gripLocal.z });
+}
+
+/** Grip slide: move the hand along the sword (0 = hilt). Internal joint-anchor move, like reach. */
+export function applyGripSlide(b: ActuatedBodies, gripAlong: number): void {
+  b.gripJoint.setAnchor2({ x: 0, y: gripAlong, z: 0 });
 }
 
 /**

@@ -13,7 +13,8 @@ import { q4, v3, UP } from '../mathUtil';
 import { GEOM } from './geometry';
 import { FootSystem } from './feet';
 import { GaitController } from './controller';
-import { SwordActuator, applyReach, applyAirControlCheat, type ActuatedBodies } from './actuators';
+import { SwordActuator, applyReach, applyGripSlide, applyAirControlCheat, type ActuatedBodies } from './actuators';
+import { TechniqueController, CARRY_ANCHOR, CARRY } from './technique';
 import { systemState, type SystemState } from './metrics';
 import { MoveController, type AttackName } from './moves';
 
@@ -33,11 +34,19 @@ export interface PlayerCommand {
   jump: boolean;
   /** Heading for the legs to turn toward (rad), or null. */
   face: number | null;
+  // --- technique mode (competent hero) ---
+  charge: boolean;
+  spin: boolean;
+  /** Edge: overhead drop. */
+  drop: boolean;
+  plant: boolean;
+  /** -1 pull in, +1 let out (during a spin). */
+  reachDir: number;
 }
 
 export const emptyCommand = (): PlayerCommand => ({
   move: new THREE.Vector3(), effort: new THREE.Vector2(), grip: false, attack: null, spinHeld: false,
-  reach: 0, jump: false, face: null,
+  reach: 0, jump: false, face: null, charge: false, spin: false, drop: false, plant: false, reachDir: 0,
 });
 
 export interface SpawnOptions {
@@ -50,6 +59,8 @@ export interface SpawnOptions {
   grounded?: boolean;
   /** Extra rotation of the whole warrior + sword about the spawn point (tests: start lying down). */
   tiltRotation?: THREE.Quaternion;
+  /** Spawn in the Carry stance with the technique controller in charge (the real game). */
+  carry?: boolean;
 }
 
 export class Player implements ActuatedBodies {
@@ -62,6 +73,16 @@ export class Player implements ActuatedBodies {
   gait!: GaitController;
   readonly swordAct: SwordActuator;
   readonly moves = new MoveController();
+  /** Technique controller (competent hero). Null = manual sword mode (tests, debug). */
+  tech: TechniqueController | null = null;
+  /** Where the hand is along the sword, metres from the hilt. */
+  gripAlong = 0;
+  /** Sword centre of mass along the blade from the hilt (the balance point). */
+  balancePoint = 1.34;
+  /** Distance from the hips to an enemy straight ahead (Infinity if none within 6 m). */
+  targetAhead = Infinity;
+  /** World heading toward that enemy. */
+  targetBearing = 0;
   /** Balance governor multiplier on swing effort (1 when the governor is off). */
   governorScale = 1;
   /** Balance-reflex multiplier on swing effort. */
@@ -70,6 +91,7 @@ export class Player implements ActuatedBodies {
   settled = true;
   private slowTime = 0;
   readonly state: SystemState = { mass: 0, com: new THREE.Vector3(), vcom: new THREE.Vector3(), P: new THREE.Vector3(), L: new THREE.Vector3() };
+  private readonly effState: SystemState = { mass: 0, com: new THREE.Vector3(), vcom: new THREE.Vector3(), P: new THREE.Vector3(), L: new THREE.Vector3() };
   reach = 0;
   readonly gripLocal = new THREE.Vector3();
   readonly gripWorld = new THREE.Vector3();
@@ -134,17 +156,25 @@ export class Player implements ActuatedBodies {
     const torsoPos = bodyPos;
 
     // --- sword ---
-    this.reach = 0;
-    this.gripLocal.copy(GEOM.grip);
-    const gripWorld = this.gripLocal.clone().applyQuaternion(qh).add(torsoPos);
-    const dirLocal = (spawn.swordDir ?? new THREE.Vector3(0, 1, 0)).clone().normalize();
-    const qs = qh.clone().multiply(new THREE.Quaternion().setFromUnitVectors(UP, dirLocal));
-    this.sword = world.createRigidBody(R.RigidBodyDesc.dynamic()
-      .setTranslation(gripWorld.x, gripWorld.y, gripWorld.z).setRotation(qs)
-      .setCcdEnabled(true).setCanSleep(false));
     const L = tun.swordLength;
     const bladeLen = L - GEOM.pommel - GEOM.bladeStart;
     const bladeMid = GEOM.bladeStart + bladeLen / 2;
+    const ms = tun.swordMass, fb = GEOM.bladeMassFraction;
+    const mb = ms * fb, mh = ms * (1 - fb);
+    const yh = 0.0;
+    const com = (mb * bladeMid + mh * yh) / ms;
+    this.balancePoint = com;
+    this.reach = 0;
+    this.tech = spawn.carry ? new TechniqueController(tun, com) : null;
+    this.gripAlong = spawn.carry ? (CARRY.grip ?? com) : 0;
+    this.gripLocal.copy(spawn.carry ? CARRY_ANCHOR : GEOM.grip);
+    const gripWorld = this.gripLocal.clone().applyQuaternion(qh).add(torsoPos);
+    const dirLocal = (spawn.swordDir ?? (spawn.carry ? new THREE.Vector3(0, 1, 0).applyQuaternion(CARRY.pose ?? new THREE.Quaternion().setFromUnitVectors(UP, new THREE.Vector3(0, 0, 1))) : new THREE.Vector3(0, 1, 0))).clone().normalize();
+    const qs = qh.clone().multiply(new THREE.Quaternion().setFromUnitVectors(UP, dirLocal));
+    const swordOrigin = gripWorld.clone().sub(new THREE.Vector3(0, this.gripAlong, 0).applyQuaternion(qs));
+    this.sword = world.createRigidBody(R.RigidBodyDesc.dynamic()
+      .setTranslation(swordOrigin.x, swordOrigin.y, swordOrigin.z).setRotation(qs)
+      .setCcdEnabled(true).setCanSleep(false));
     this.swordBlade = world.createCollider(R.ColliderDesc.cuboid(GEOM.bladeWidth / 2, bladeLen / 2, GEOM.bladeThickness / 2)
       .setTranslation(0, bladeMid, 0).setDensity(0).setFriction(0.5).setRestitution(0.15)
       .setCollisionGroups(swordGroups)
@@ -155,10 +185,6 @@ export class Player implements ActuatedBodies {
     world.createCollider(R.ColliderDesc.capsule((GEOM.pommel + GEOM.bladeStart) / 2 - 0.05, 0.05)
       .setTranslation(0, (GEOM.bladeStart - GEOM.pommel) / 2 - 0.05, 0).setDensity(0).setFriction(0.5)
       .setCollisionGroups(swordGroups), this.sword);
-    const ms = tun.swordMass, fb = GEOM.bladeMassFraction;
-    const mb = ms * fb, mh = ms * (1 - fb);
-    const yh = 0.0;
-    const com = (mb * bladeMid + mh * yh) / ms;
     const Ixx = mb * (bladeLen * bladeLen + GEOM.bladeThickness ** 2) / 12 + mb * (bladeMid - com) ** 2
       + mh * (0.55 ** 2) / 12 + mh * (yh - com) ** 2;
     const Iyy = mb * (GEOM.bladeWidth ** 2 + GEOM.bladeThickness ** 2) / 12 + mh * 0.01;
@@ -167,7 +193,7 @@ export class Player implements ActuatedBodies {
     this.sword.setAdditionalMassProperties(ms, { x: 0, y: com, z: 0 }, { x: Ixx, y: Iyy, z: Izz }, { x: 0, y: 0, z: 0, w: 1 }, true);
 
     this.gripJoint = world.createImpulseJoint(
-      R.JointData.spherical({ x: this.gripLocal.x, y: this.gripLocal.y, z: this.gripLocal.z }, { x: 0, y: 0, z: 0 }),
+      R.JointData.spherical({ x: this.gripLocal.x, y: this.gripLocal.y, z: this.gripLocal.z }, { x: 0, y: this.gripAlong, z: 0 }),
       this.torso, this.sword, true);
     this.gripJoint.setContactsEnabled(false);
 
@@ -183,13 +209,18 @@ export class Player implements ActuatedBodies {
     if (spawn.grounded !== false) this.gait.plantAt(this.state, bodyPos, qh);
   }
 
+  /** World position of the hand on the sword. */
+  gripPoint(): THREE.Vector3 {
+    return new THREE.Vector3(0, this.gripAlong, 0).applyQuaternion(q4(this.sword.rotation())).add(v3(this.sword.translation()));
+  }
+
   /** Remove all bodies and rebuild at a new spawn (also picks up changed mass/length tunables). */
   /** Put him back on his feet at his current spot (keeps health). */
   standUpInPlace(): void {
     const p = v3(this.body.translation());
     const ground = this.feet.probe(p, 0.5, 4).y;
     const hp = this.health;
-    this.respawn({ position: new THREE.Vector3(p.x, ground > -1e6 ? ground : 0, p.z), heading: this.feet.frameYaw });
+    this.respawn({ position: new THREE.Vector3(p.x, ground > -1e6 ? ground : 0, p.z), heading: this.feet.frameYaw, carry: !!this.tech });
     this.health = hp;
     this.stoodUp++;
   }
@@ -217,6 +248,8 @@ export class Player implements ActuatedBodies {
     systemState(this.bodies, this.state);
     const pelvisPos = v3(this.pelvis.translation());
     const pelvisQ = q4(this.pelvis.rotation());
+
+    if (this.tech) { this.preStepTechnique(dt, cmd, pelvisPos, pelvisQ); return; }
 
     // swing intent: named attacks, effort, grip and how braced the legs should be
     const sq = q4(this.sword.rotation());
@@ -279,7 +312,8 @@ export class Player implements ActuatedBodies {
       const effortW = new THREE.Vector3(0, -mv.effort.x, 0).addScaledVector(pitchAxis, mv.effort.y)
         .multiplyScalar(tun.swordEffort * this.governorScale * this.reflexScale);
       this.swordAct.resting = this.swordTouching;
-      this.swordAct.applyFree(this, effortW, v3(this.sword.translation()), dt);
+      this.swordAct.support = 1;
+      this.swordAct.applyFree(this, effortW, this.gripPoint(), dt);
     }
 
     // reach
@@ -293,6 +327,74 @@ export class Player implements ActuatedBodies {
 
     this.feet.apply(dt);
 
+    if (tun.cheatAirControl && this.gait.airborne) applyAirControlCheat(this.bodies, cmd.move, dt);
+  }
+
+  /** Technique mode: the controller chooses targets; actuators and feet deliver them. */
+  private preStepTechnique(dt: number, cmd: PlayerCommand, hipPos: THREE.Vector3, bodyQ: THREE.Quaternion): void {
+    const tun = this.tun;
+    // is there an enemy straight ahead? (read-only ray from the chest along his heading)
+    const yaw = this.feet.frameYaw;
+    const from = hipPos.clone().add(new THREE.Vector3(0, -0.25, 0));
+    // a fan of rays: what he can see in front of him
+    this.targetAhead = Infinity; this.targetBearing = 0;
+    for (let i = -4; i <= 4; i++) {
+      const a = yaw + i * 0.09;
+      const hit = this.pw.world.castRay(new this.pw.R.Ray(from, { x: Math.sin(a), y: 0, z: Math.cos(a) }), 6, true, undefined,
+        groups(0xffff, GROUP.ENEMY | GROUP.SHIELD));
+      if (hit && hit.timeOfImpact < this.targetAhead - 0.05) { this.targetAhead = hit.timeOfImpact; this.targetBearing = a; }
+    }
+    const tilt = Math.acos(THREE.MathUtils.clamp(new THREE.Vector3(0, 1, 0).applyQuaternion(bodyQ).y, -1, 1));
+    this.reflexScale = tun.balanceReflex ? 1 - THREE.MathUtils.clamp((tilt - 0.3) / 0.4, 0, 1) : 1;
+
+    const out = this.tech!.update(dt, cmd, this);
+    cmd.drop = false;
+    this.gait.setBrace(out.brace, null, dt);
+    this.feet.updateFrame();
+    this.gait.twistOverride = out.twist;
+    this.gait.holdGround = out.holdGround;
+    const move = out.moveVel.clone().divideScalar(tun.walkSpeed);
+    // What the legs have to balance: his own body plus the share of the sword he is actually
+    // carrying (a sword in free fall or resting on the floor is not his to hold up).
+    const eff = this.effState;
+    const load = out.swordLoad;
+    const mb = this.body.mass(), ms = this.sword.mass() * load;
+    eff.mass = mb + ms;
+    // carried as a rigid load: it counts where its own centre of mass is. Hanging loose from
+    // his hands (falling, or tip on the floor): it only pulls at the grip.
+    const at = out.loadAtGrip ? this.gripPoint() : v3(this.sword.worldCom());
+    const atVel = out.loadAtGrip ? v3(this.body.velocityAtPoint(at)) : v3(this.sword.linvel());
+    eff.com.copy(v3(this.body.worldCom())).multiplyScalar(mb).addScaledVector(at, ms).divideScalar(eff.mass);
+    eff.vcom.copy(v3(this.body.linvel())).multiplyScalar(mb).addScaledVector(atVel, ms).divideScalar(eff.mass);
+    // The leg drive follows a point a little above the hips, so a pitching torso makes the legs
+    // hurry under it (balance). How far above sets how strongly: too high and he cannot brake.
+    const ref = hipPos.clone().add(new THREE.Vector3(0, tun.balanceLever, 0).applyQuaternion(bodyQ));
+    this.gait.update(dt, { move, jump: this.pendingJump && out.allowJump, faceYaw: out.face }, eff, hipPos, this.feet.frameQ,
+      bodyQ, v3(this.body.angvel()), v3(this.body.velocityAtPoint(ref)));
+    this.pendingJump = false;
+
+    this.swordAct.strength = this.fallen ? 0.05 : Math.min(1, this.swordAct.strength + dt * 0.7);
+    // hands: slide along the sword and move relative to the body, both rate limited
+    const dg = THREE.MathUtils.clamp(out.gripAlong - this.gripAlong, -out.slideSpeed * dt, out.slideSpeed * dt);
+    this.gripAlong += dg;
+    const da = out.anchor.clone().sub(this.gripLocal);
+    const maxA = out.anchorSpeed * dt;
+    if (da.length() > maxA) da.setLength(maxA);
+    this.gripLocal.add(da);
+    applyGripSlide(this, this.gripAlong);
+    applyReach(this, this.gripLocal);
+
+    if (out.free) {
+      this.swordAct.resting = this.swordTouching;
+      this.swordAct.support = out.support;
+      this.swordAct.applyFree(this, out.effort, this.gripPoint(), dt);
+    } else {
+      this.swordAct.poseTarget = this.fallen ? null : out.pose;
+      this.swordAct.poseRate = out.poseRate;
+      this.swordAct.apply(this, this.swingCmd.set(0, 0, 0), dt);
+    }
+    this.sword.setGravityScale(tun.cheatWeightlessSword ? 0 : 1, false);
+    this.feet.apply(dt);
     if (tun.cheatAirControl && this.gait.airborne) applyAirControlCheat(this.bodies, cmd.move, dt);
   }
 

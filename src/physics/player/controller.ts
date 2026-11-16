@@ -37,6 +37,10 @@ export class GaitController {
   lastStepSide: -1 | 1 = 1;
   stepCount = 0;
   lastStepReason = '';
+  /** Feet stay planted and simply hold (no balance-by-walking), e.g. while re-gripping the sword. */
+  holdGround = false;
+  /** Direct yaw rate for the stance legs (spin technique), or null to use faceYaw. */
+  twistOverride: number | null = null;
   /** 0..1: braced for a swing (crouched, wider/staggered stance, stiffer hips). */
   brace = 0;
   /** Horizontal direction to stagger the feet along (pitch swings), or null for a wide stance. */
@@ -74,20 +78,30 @@ export class GaitController {
     // actually happens; the support polygon decides whether the torso can stay upright doing it.
     if (this.airborne || feet.legsDisabled) {
       this.vDrive.set(hipVel.x, 0, hipVel.z);
-    } else if (vDes.lengthSq() < 1e-4 && Math.hypot(hipVel.x, hipVel.z) < 0.15) {
+    } else if (this.holdGround || (vDes.lengthSq() < 1e-4 && Math.hypot(hipVel.x, hipVel.z) < 0.15)) {
       // standing: the planted feet just hold their ground (friction decides how much they can)
       this.vDrive.set(0, 0, 0);
     } else {
       // walking: push the hips toward the desired velocity with a bounded acceleration
       const acc = new THREE.Vector3(vDes.x - hipVel.x, 0, vDes.z - hipVel.z).divideScalar(0.25);
-      clampLen(acc, tun.walkAccel);
+      // slowing down a top-heavy load has to be gentler than speeding it up, or it pitches over
+      const braking = acc.x * hipVel.x + acc.z * hipVel.z < 0;
+      clampLen(acc, braking ? tun.walkDecel : tun.walkAccel);
       this.vDrive.set(hipVel.x, 0, hipVel.z).addScaledVector(acc, dt);
+      // hipVel is the body's COM velocity, so a body pitching forward makes the legs hurry to get
+      // under it (good: that is his balance). But it must not turn into a runaway sprint: the
+      // sweep never exceeds the commanded speed by more than a small margin.
+      // (only while walking: when standing he must be free to step after a shove or a swing)
+      const cap = vDes.length() * tun.driveOverspeed;
+      if (vDes.length() > 0.5 && this.vDrive.length() > cap) this.vDrive.setLength(cap);
     }
     feet.driveVel.copy(this.vDrive);
     feet.hipStrengthScale = 1 + this.brace;
 
     // --- turning: the stance legs twist the hips toward the wanted heading (friction limited) ---
-    if (input.faceYaw !== null && !this.airborne && !feet.legsDisabled) {
+    if (this.twistOverride !== null && !this.airborne && !feet.legsDisabled) {
+      feet.twistRate = this.twistOverride;
+    } else if (input.faceYaw !== null && !this.airborne && !feet.legsDisabled) {
       let e = input.faceYaw - feet.frameYaw;
       while (e > Math.PI) e -= 2 * Math.PI;
       while (e < -Math.PI) e += 2 * Math.PI;
@@ -117,7 +131,11 @@ export class GaitController {
     // Hip torque keeping the torso upright on its legs. It is delivered by moving the centre of
     // pressure, so it is limited by the support polygon as well as by the hip's strength.
     if (this.balanceEnabled && !this.airborne) {
-      const up = new THREE.Vector3(0, 1, 0).applyQuaternion(bodyQ);
+      // "upright" = the line from the hips to the system centre of mass is vertical (he leans
+      // back against a sword held in front), blended with keeping the torso itself upright
+      const bodyUp = new THREE.Vector3(0, 1, 0).applyQuaternion(bodyQ);
+      const comUp = new THREE.Vector3().subVectors(sys.com, pelvisPos).normalize();
+      const up = bodyUp.lerp(comUp, tun.balanceOnCom).normalize();
       const e = new THREE.Vector3().crossVectors(up, new THREE.Vector3(0, 1, 0)); // axis * sin(tilt)
       const wh = bodyW.clone(); wh.y = 0;
       // feed-forward: hold up everything above the hips (torso + sword) against gravity
