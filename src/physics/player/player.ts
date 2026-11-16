@@ -225,9 +225,53 @@ export class Player implements ActuatedBodies {
     this.stoodUp++;
   }
 
+  /** Is he holding the sword at all? (False after letting go of it; the joint is removed.) */
+  holding = true;
+
+  /** Let go of the sword: the grip joint is removed. No force is involved. */
+  release(): void {
+    if (!this.holding) return;
+    this.pw.world.removeImpulseJoint(this.gripJoint, true);
+    this.holding = false;
+  }
+
+  /**
+   * Take hold of the sword where his hands are: `hand` in the body frame, `along` the point on
+   * the sword axis (local y). The joint is created at the pose the two bodies already have, so
+   * gripping applies no impulse beyond matching the (small) relative velocity at the hands,
+   * which is internal and equal and opposite.
+   */
+  grab(hand: THREE.Vector3, along: number): void {
+    if (this.holding) return;
+    this.gripLocal.copy(hand);
+    this.gripAlong = along;
+    this.gripJoint = this.pw.world.createImpulseJoint(
+      this.pw.R.JointData.spherical({ x: hand.x, y: hand.y, z: hand.z }, { x: 0, y: along, z: 0 }), this.torso, this.sword, true);
+    this.gripJoint.setContactsEnabled(false);
+    this.holding = true;
+    this.swordAct.newJoint(this);
+  }
+
+  /** The sword's balance point in world space. */
+  balanceWorld(): THREE.Vector3 {
+    return new THREE.Vector3(0, this.balancePoint, 0).applyQuaternion(q4(this.sword.rotation())).add(v3(this.sword.translation()));
+  }
+
+  /** The sword's orientation relative to the body. */
+  swordRelPose(): THREE.Quaternion {
+    return q4(this.body.rotation()).invert().multiply(q4(this.sword.rotation()));
+  }
+
+  /** A point on the sword (local y) expressed in the body frame. */
+  swordPointInBody(along: number): THREE.Vector3 {
+    const w = new THREE.Vector3(0, along, 0).applyQuaternion(q4(this.sword.rotation())).add(v3(this.sword.translation()));
+    return w.sub(v3(this.body.translation())).applyQuaternion(q4(this.body.rotation()).invert());
+  }
+
   respawn(spawn: SpawnOptions): void {
     const world = this.pw.world;
-    world.removeImpulseJoint(this.gripJoint, true);
+    if (this.holding) world.removeImpulseJoint(this.gripJoint, true);
+    this.holding = true;
     for (const b of this.bodies) world.removeRigidBody(b);
     this.health = this.maxHealth;
     this.fallenTime = 0;
@@ -353,6 +397,7 @@ export class Player implements ActuatedBodies {
     this.feet.updateFrame();
     this.gait.twistOverride = out.twist;
     this.gait.holdGround = out.holdGround;
+    this.gait.balanceOnCom = out.balanceOnCom;
     const move = out.moveVel.clone().divideScalar(tun.walkSpeed);
     // What the legs have to balance: his own body plus the share of the sword he is actually
     // carrying (a sword in free fall or resting on the floor is not his to hold up).
@@ -374,6 +419,15 @@ export class Player implements ActuatedBodies {
     this.pendingJump = false;
 
     this.swordAct.strength = this.fallen ? 0.05 : Math.min(1, this.swordAct.strength + dt * 0.7);
+    if (!this.holding) {
+      // empty hands: they just go where he wants them (nothing to push against)
+      const da = out.anchor.clone().sub(this.gripLocal);
+      if (da.length() > out.anchorSpeed * dt) da.setLength(out.anchorSpeed * dt);
+      this.gripLocal.add(da);
+      this.sword.setGravityScale(tun.cheatWeightlessSword ? 0 : 1, false);
+      this.feet.apply(dt);
+      return;
+    }
     // hands: slide along the sword and move relative to the body, both rate limited
     const dg = THREE.MathUtils.clamp(out.gripAlong - this.gripAlong, -out.slideSpeed * dt, out.slideSpeed * dt);
     this.gripAlong += dg;
@@ -401,13 +455,35 @@ export class Player implements ActuatedBodies {
   /** Is the blade touching anything (ground, wall, goblin)? Read from the narrow phase. */
   swordTouching = false;
 
+  /** Furthest point along the sword (local y from the hilt) where something holds the blade up, or NaN. */
+  swordRestAlong = NaN;
+
+  /**
+   * Share of the sword's weight his hands carry, by statics: a beam held at the grip and resting
+   * on its furthest contact. Free (nothing touching) the hands carry all of it.
+   */
+  handShare(): number {
+    const c = this.swordRestAlong, com = this.balancePoint, g = this.gripAlong;
+    if (!Number.isFinite(c)) return 1;
+    if (c < com + 0.05) return 1; // resting behind its balance point: it just pivots on that
+    return THREE.MathUtils.clamp((c - com) / Math.max(c - g, 0.05), 0, 1);
+  }
+
   postStep(dt: number): void {
-    let touching = false;
+    let touching = false, rest = NaN;
+    const sq = q4(this.sword.rotation()).invert(), sp = v3(this.sword.translation());
     this.pw.world.contactPairsWith(this.swordBlade, (other) => {
-      if (touching) return;
-      this.pw.world.contactPair(this.swordBlade, other, (m) => { if (m.numSolverContacts() > 0) touching = true; });
+      this.pw.world.contactPair(this.swordBlade, other, (m) => {
+        for (let i = 0; i < m.numSolverContacts(); i++) {
+          touching = true;
+          const cp = m.solverContactPoint(i); if (!cp) continue;
+          const y = v3(cp).sub(sp).applyQuaternion(sq).y;
+          if (!(y <= rest)) rest = y;
+        }
+      });
     });
     this.swordTouching = touching;
+    this.swordRestAlong = rest;
     this.gripWorld.copy(this.gripLocal).applyQuaternion(q4(this.torso.rotation())).add(v3(this.torso.translation()));
     this.swordAct.measure(this, this.gripWorld, dt);
     this.fallenTime = this.fallen ? this.fallenTime + dt : 0;

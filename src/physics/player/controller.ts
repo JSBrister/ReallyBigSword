@@ -39,6 +39,8 @@ export class GaitController {
   lastStepReason = '';
   /** Feet stay planted and simply hold (no balance-by-walking), e.g. while re-gripping the sword. */
   holdGround = false;
+  /** Per-move override of tun.balanceOnCom, or null. */
+  balanceOnCom: number | null = null;
   /** Direct yaw rate for the stance legs (spin technique), or null to use faceYaw. */
   twistOverride: number | null = null;
   /** 0..1: braced for a swing (crouched, wider/staggered stance, stiffer hips). */
@@ -135,7 +137,7 @@ export class GaitController {
       // back against a sword held in front), blended with keeping the torso itself upright
       const bodyUp = new THREE.Vector3(0, 1, 0).applyQuaternion(bodyQ);
       const comUp = new THREE.Vector3().subVectors(sys.com, pelvisPos).normalize();
-      const up = bodyUp.lerp(comUp, tun.balanceOnCom).normalize();
+      const up = bodyUp.lerp(comUp, this.balanceOnCom ?? tun.balanceOnCom).normalize();
       const e = new THREE.Vector3().crossVectors(up, new THREE.Vector3(0, 1, 0)); // axis * sin(tilt)
       const wh = bodyW.clone(); wh.y = 0;
       // feed-forward: hold up everything above the hips (torso + sword) against gravity
@@ -189,7 +191,10 @@ export class GaitController {
     let pick = -1;
     if (airFoot >= 0 && stance.length === 1) pick = airFoot;
     else if (stance.length === 2) {
-      const need = walking || (this.balanceEnabled && captureOut) || Math.max(...errs) > 0.2 || Math.max(...twist) > 0.3;
+      // planted (holdGround): only a real loss of balance makes him take a step
+      const need = this.holdGround
+        ? this.balanceEnabled && signedDistToPolygon({ x: this.capture.x, z: this.capture.z }, this.support) > 0.1
+        : walking || (this.balanceEnabled && captureOut) || Math.max(...errs) > 0.2 || Math.max(...twist) > 0.3;
       if (need) {
         if (walking && Math.abs(errs[0] - errs[1]) < 0.15) pick = this.lastStepSide < 0 ? 1 : 0;
         else if (Math.max(...twist) > 0.3 && Math.max(...errs) < 0.2) pick = twist[0] > twist[1] ? 0 : 1;

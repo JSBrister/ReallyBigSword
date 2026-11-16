@@ -174,12 +174,22 @@ Prefer vitest experiments with `makeSandbox()` for anything about the hero alone
 - A split (staggered) stance for bracing made slams worse because it triggers steps at the wrong moment. Leave `braceStagger` at 0.
 - Lifting the sword from the floor by the hilt tips him over every time. Always slide the grip to the balance point first.
 - Hard, fast sword torques at hilt grip topple him (16:1 inertia). Anything fast must be done either at balance-point grip, by the feet turning the whole pair, by gravity, or by running.
+- Carry: the only stable walking stance found is the sword upright, held at the hilt, hands in front of the chest (`CARRY_ANCHOR`). Level/shoulder carries at the balance point run away and fall.
+- Charge-at-speed (running chop, thrust) throws him over. What works: READY = walk up, stop, square up (ray fan), then a gravity-driven chop (`support 0`, small nudge). Driving the chop with torque throws him backward.
+- After the blade lands across a target, telling the legs he carries only 15% of the sword is wrong: use `handShare()` (beam statics from the furthest blade contact, `swordRestAlong`).
+- While the feet are meant to stay planted, the gait must not take steps for foot error/twist (`holdGround` now only steps on real capture-point loss), or he rocks side to side on one foot.
+- Sliding the grip up the blade with the feet planted drags 150 kg back through his hands and pulls him forward; he has to walk toward the sword as the grip slides.
+- The hand force on a shallow, leaning sword is ladder-like (≈2 kN horizontal, near the feet's friction limit). This is what makes every grip-held recovery marginal.
+- EMPTY-HANDED HE CANNOT STAND (found in round 6): with 90 kg on the feet the centre-of-pressure shift gives the hips only ≈200 N·m; the body COM is only 0.11 m above the hip pivot, so its inertia is tiny and `hipDamping` 2500 is at the edge of explicit stability at 480 Hz. After `release()` he leans 10–45° and runs off at up to 5 m/s. Any design where he lets go of the sword needs this fixed first (`tools/experiments/empty.exp.ts`).
+- `balanceOnCom` = 1 is wrong when the load hangs near hip height: the hip→COM line is then far from vertical and the hips get asked for 6–8 kN·m.
 - When a change makes several things worse at once, revert it and change one knob at a time, re-running `walk2.exp.ts` and `npm test` after each.
 
 ## 9. Progress
 
-- [ ] Phase 0 — baseline and session harness
-- [ ] Phase 1 — grip slide and Carry
+- [x] Phase 0 — baseline and session harness (`tools/experiments/session.ts`)
+- [x] Phase 1 — grip slide and Carry (upright hilt carry; 0 falls in carry/carry2/carry3/long at carrySpeed 2.0)
+- [~] Phase 3 (part) — READY auto-approach + gravity chop works; damaging hits at the 6.5 m/s threshold only at about 2.1 m. Thrust dropped.
+- [ ] BLOCKER — getting the sword back up after a chop. Tried: regrip with planted feet (falls forward), regrip walking up the blade (completes; falls in raise), lean over the system COM (worse), low hands (worse), let go and pick up at the balance point (`release()`/`grab()` + approach/pickup/lift; fails because he cannot stand empty-handed). Needs a design decision; see the round-6 report.
 - [ ] Phase 2 — technique state machine and input
 - [ ] Phase 3 — charge and thrust
 - [ ] Phase 4 — drag and spin (4a / 4b / 4c)

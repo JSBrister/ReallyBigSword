@@ -79,6 +79,14 @@ export class SwordActuator {
   readonly torque = new THREE.Vector3();
   usage = 0;
   private lastMax = -1;
+  /** The grip joint was re-created: set its motors up again, and hold the pose it has now. */
+  newJoint(b: ActuatedBodies): void {
+    this.lastMax = -1;
+    this.mode = 'free';
+    q4(b.torso.rotation(), tq);
+    q4(b.sword.rotation(), tqs);
+    this.qTarget.copy(tq).invert().multiply(tqs);
+  }
   private prevSpin = new THREE.Vector3();
   private prevVcom = new THREE.Vector3();
   private havePrev = false;

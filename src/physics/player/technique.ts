@@ -15,11 +15,16 @@ import type { Tunables } from '../tunables';
 import type { Player, PlayerCommand } from './player';
 import { q4, v3 } from '../mathUtil';
 
-export type TechniqueState = 'carry' | 'charge' | 'set' | 'chop' | 'follow' | 'regrip' | 'raise' | 'lower' | 'spinUp' | 'spin' | 'release' | 'plant' | 'recover';
+export type TechniqueState = 'carry' | 'charge' | 'set' | 'chop' | 'follow' | 'approach' | 'pickup' | 'lift' | 'raise' | 'lower' | 'spinUp' | 'spin' | 'release' | 'plant' | 'recover';
 
 /** Body frame: +Z forward, +Y up, -X is his right. */
 export const CARRY_ANCHOR = new THREE.Vector3(0, 0.45, 0.4); // in front of the chest
+/** Where the hands hold the sword at its balance point for the deadlift, close in front of the hips. */
+export const LIFT_ANCHOR = new THREE.Vector3(0, 0.05, 0.4);
+/** How far in front of the hips he stands from the point he picks the sword up at (m). */
+const PICKUP_REACH = 0.45;
 /** Experiment hook: alternative carry stance (pose, grip position, anchor). */
+export const EXP = { emptyWalk: false, releaseOnStrike: false, followHold: true, regripWalk: 1, planted: { com: 0, anchor: null as THREE.Vector3 | null } };
 export const CARRY = { pose: new THREE.Quaternion() as THREE.Quaternion | null, grip: 0 as number | null };
 const UPV = new THREE.Vector3(0, 1, 0);
 const dirPose = (x: number, y: number, z: number) =>
@@ -51,6 +56,8 @@ export interface TechniqueOutput {
   allowJump: boolean;
   /** Feet planted, no stepping about. */
   holdGround: boolean;
+  /** Balance the whole system (1) or the torso (0) over the hips; null = tunable. */
+  balanceOnCom: number | null;
 }
 
 
@@ -62,7 +69,7 @@ export class TechniqueController {
   heading = 0;
   readonly out: TechniqueOutput = {
     pose: POSE_LEVEL_FWD.clone(), poseRate: 2, gripAlong: 0, slideSpeed: 1.5, anchor: CARRY_ANCHOR.clone(), anchorSpeed: 1.5,
-    free: false, effort: new THREE.Vector3(), support: 1, swordLoad: 1, loadAtGrip: false, moveVel: new THREE.Vector3(), face: null, twist: null, brace: 0, allowJump: true, holdGround: false,
+    free: false, effort: new THREE.Vector3(), support: 1, swordLoad: 1, loadAtGrip: false, moveVel: new THREE.Vector3(), face: null, twist: null, brace: 0, allowJump: true, holdGround: false, balanceOnCom: null,
   };
 
   constructor(private tun: Tunables, private balance: number) {
@@ -70,6 +77,12 @@ export class TechniqueController {
   }
 
   private go(s: TechniqueState): void { this.state = s; this.t = 0; }
+
+  /** Feet planted with the blade down: lean back over everything and keep the hands low. */
+  private planted(): void {
+    this.out.balanceOnCom = EXP.planted.com;
+    if (EXP.planted.anchor) this.out.anchor.copy(EXP.planted.anchor);
+  }
 
   update(dt: number, cmd: PlayerCommand, p: Player): TechniqueOutput {
     const tun = this.tun, o = this.out;
@@ -86,9 +99,11 @@ export class TechniqueController {
     o.anchor.copy(CARRY_ANCHOR); o.anchorSpeed = tun.anchorSpeed;
     o.free = false; o.effort.set(0, 0, 0); o.support = 1; o.swordLoad = 1; o.loadAtGrip = false;
     o.moveVel.set(cmd.move.x, 0, cmd.move.z).multiplyScalar(tun.carrySpeed);
-    o.face = moveYaw; o.twist = null; o.brace = 0; o.allowJump = true; o.holdGround = false;
+    o.face = moveYaw; o.twist = null; o.brace = 0; o.allowJump = true; o.holdGround = false; o.balanceOnCom = null;
 
     if (p.fallen) { this.go('recover'); }
+    // empty-handed (let go of it): the only thing to do is go and pick it up again
+    else if (!p.holding && this.state !== 'approach' && this.state !== 'pickup' && this.state !== 'recover' && this.state !== 'follow') this.go('approach');
 
     const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
     const rightAxis = new THREE.Vector3(-fwd.z, 0, fwd.x); // his right; + rotation about it tips the blade back
@@ -142,34 +157,63 @@ export class TechniqueController {
         o.face = this.heading;
         o.moveVel.set(Math.sin(this.heading), 0, Math.cos(this.heading)).multiplyScalar(0);
         o.allowJump = false; o.brace = 1;
-        if (p.swordTip.y < 0.45 || (this.t > 0.15 && p.swordTouching) || this.t > 1.5) this.go('follow');
+        if (p.swordTip.y < 0.45 || (this.t > 0.15 && p.swordTouching) || this.t > 1.5) {
+          // it has struck: let go, or the blade stopping dead would yank him over with it
+          if (EXP.releaseOnStrike) p.release();
+          this.go('follow');
+        }
         break;
       }
 
       case 'follow': {
         // no more push: the blade finishes on its own momentum and comes to rest
-        o.free = true; o.support = 0; o.swordLoad = 0.15;
-        o.face = this.heading; o.moveVel.set(0, 0, 0);
+        // whatever the blade is not resting on hangs from his hands
+        o.free = true; o.support = 0; o.swordLoad = !p.holding ? 0 : p.swordTouching ? p.handShare() : 0.15; o.loadAtGrip = true;
+        o.face = this.heading; o.moveVel.set(0, 0, 0); o.holdGround = EXP.followHold; this.planted();
         o.allowJump = false; o.brace = 1;
-        const rel = v3(p.sword.angvel()).sub(v3(p.body.angvel())).length();
+        const rel = p.holding ? v3(p.sword.angvel()).sub(v3(p.body.angvel())).length() : v3(p.sword.angvel()).length() + v3(p.sword.linvel()).length();
         // wait until it has really come to rest on the floor and he is steady
         const down = p.swordTip.y - (p.feet.cop.y || 0) < 0.3;
-        if ((this.t > 0.25 && rel < 0.6 && down && speed < 0.3) || this.t > 3) this.go('regrip');
+        if ((this.t > 0.25 && rel < 0.6 && down && speed < 0.3) || this.t > 3) { p.release(); this.go('approach'); }
         break;
       }
 
-      case 'regrip': {
-        // Grip hard where it landed (he and the planted sword make a stable tripod), then, since
-        // it must never be lifted by the hilt, walk the hands up the blade to the balance point.
-        // (loose arms, no torque at all: the floor holds the tip, his hands only carry the blade
-        // where they hold it, and at the balance point that is the whole sword with no leverage)
-        o.free = true; o.support = 0;
-        o.swordLoad = 0.3 + 0.7 * Math.min(1, p.gripAlong / this.balance);
-        o.gripAlong = this.t > 0.2 ? this.balance : 0;
-        o.holdGround = true;
-        o.slideSpeed = tun.gripSlideSpeed * 0.6;
-        o.face = null; o.moveVel.set(0, 0, 0); o.allowJump = false; o.brace = 0.5;
-        if (Math.abs(p.gripAlong - this.balance) < 0.02 || this.t > 2.5) this.go('raise');
+      case 'approach': {
+        // He has let go. Step up to the sword's balance point and face it: picking a 150 kg
+        // beam up anywhere else means fighting its leverage.
+        o.swordLoad = 0; o.anchor.copy(LIFT_ANCHOR);
+        const b = p.balanceWorld();
+        const hip = v3(p.body.translation());
+        const to = new THREE.Vector3(b.x - hip.x, 0, b.z - hip.z);
+        const dist = to.length(); to.normalize();
+        o.face = Math.atan2(to.x, to.z);
+        const err = dist - PICKUP_REACH;
+        o.moveVel.copy(to).multiplyScalar(Math.abs(err) < 0.08 ? 0 : THREE.MathUtils.clamp(1.2 * err, -0.6, 1.2));
+        o.allowJump = false;
+        const facing = Math.abs(Math.atan2(Math.sin(o.face - yaw), Math.cos(o.face - yaw))) < 0.2;
+        if (EXP.emptyWalk) { o.moveVel.set(cmd.move.x, 0, cmd.move.z).multiplyScalar(tun.carrySpeed); o.face = moveYaw; break; }
+        if (Math.abs(err) < 0.15 && facing && speed < 0.3 && this.t > 0.3) this.go('pickup');
+        break;
+      }
+
+      case 'pickup': {
+        // reach down to it (empty hands move freely), then close the grip where they are
+        o.swordLoad = 0; o.holdGround = true; o.face = null; o.moveVel.set(0, 0, 0); o.allowJump = false; o.brace = 0.5;
+        const hand = p.swordPointInBody(this.balance);
+        o.anchor.copy(hand); o.anchorSpeed = tun.anchorSpeed;
+        const reach = hand.distanceTo(new THREE.Vector3(0, 0.45, 0.1));
+        if (reach > 1.15 || this.t > 3) { this.go('approach'); break; } // out of reach: step closer
+        if (p.gripLocal.distanceTo(hand) < 0.03) { p.grab(hand, this.balance); this.go('lift'); }
+        break;
+      }
+
+      case 'lift': {
+        // deadlift: it hangs from his hands at its balance point, straight in front of the hips;
+        // keep its orientation (hold mode, pose = as gripped) and bring the hands up
+        o.pose.copy(p.swordRelPose()); o.poseRate = 0;
+        o.gripAlong = this.balance; o.anchor.copy(LIFT_ANCHOR); o.anchorSpeed = tun.anchorSpeed * 0.5;
+        o.holdGround = true; o.face = null; o.moveVel.set(0, 0, 0); o.allowJump = false; o.brace = 0.5;
+        if (p.gripLocal.distanceTo(LIFT_ANCHOR) < 0.03 || this.t > 3) this.go('raise');
         break;
       }
 
@@ -180,7 +224,7 @@ export class TechniqueController {
         const gripH = p.gripPoint().y - (p.feet.cop.y || 0);
         o.gripAlong = Math.min(this.balance, (gripH - 0.15) / Math.max(sdir.y, 0.1) - 0.3);
         o.poseRate = tun.raiseRate;
-        o.holdGround = true;
+        o.holdGround = true; o.anchor.copy(LIFT_ANCHOR);
         o.face = null; o.moveVel.set(0, 0, 0); o.allowJump = false; o.brace = 0.5;
         if (sdir.y > 0.985 || this.t > 4) this.go('lower');
         break;
@@ -199,7 +243,7 @@ export class TechniqueController {
         // on the floor or just up: relax until he is upright, then re-shoulder the sword
         o.moveVel.set(0, 0, 0); o.face = null; o.allowJump = false;
         const up = new THREE.Vector3(0, 1, 0).applyQuaternion(q4(p.body.rotation())).y;
-        if (!p.fallen && up > 0.95 && this.t > 0.5) this.go('carry');
+        if (!p.fallen && up > 0.95 && this.t > 0.5) this.go(p.holding ? 'carry' : 'approach');
         break;
       }
 
