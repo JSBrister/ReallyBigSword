@@ -101,6 +101,8 @@ export class Foot {
 
 export interface SlipEvent { pos: THREE.Vector3; speed: number; N: number; material: string }
 
+/** m/s a lifted planted leg straightens at to find the ground again (experiment hook). */
+export const LEG_REACH_RATE = { v: 0.6 };
 const tmpP = new THREE.Vector3();
 const tmpV = new THREE.Vector3();
 const tmpF = new THREE.Vector3();
@@ -126,6 +128,8 @@ export class FootSystem {
   readonly hipTorque = new THREE.Vector3();
   /** Centre of pressure (world, on the ground) this substep. */
   readonly cop = new THREE.Vector3();
+  /** Net horizontal ground force on the hips last substep (N). */
+  readonly lastFt = new THREE.Vector3();
   /** Stance frame: heading only (the legs stay under the hips whatever the torso does). */
   readonly frameQ = new THREE.Quaternion();
   frameYaw = 0;
@@ -260,7 +264,7 @@ export class FootSystem {
       if (foot.phase === 'stance') {
         foot.noContactTime = anyContact ? 0 : foot.noContactTime + dt;
         // a planted leg that is lifted off the ground straightens to keep pushing
-        if (!anyContact && !this.legsDisabled && this.thrust === 0) foot.legOffset = Math.min(0.2, foot.legOffset + 2.5 * dt);
+        if (!anyContact && !this.legsDisabled && this.thrust === 0) foot.legOffset = Math.min(0.2, foot.legOffset + LEG_REACH_RATE.v * dt);
         if (foot.noContactTime > 0.1) foot.phase = 'air';
       } else if (foot.phase === 'air') {
         if (anyContact) {
@@ -416,6 +420,7 @@ export class FootSystem {
       groundY += cp.groundY * cp.Neff / Ntot;
     }
     Ft.divideScalar(dt);
+    this.lastFt.copy(Ft);
     Myaw = this.followsBody ? Myaw / dt : 0; // a freely twisting hip passes no yaw torque
     const L = hip.y - groundY; // hip height above the contact plane
     // CoP offset d (horizontal, from the hip) so that the moment about the hip equals the request:

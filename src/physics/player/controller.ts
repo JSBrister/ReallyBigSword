@@ -56,6 +56,13 @@ export class GaitController {
     else if (target > 0.1) this.braceAxis = null;
   }
   private retracting = false;
+  /** Horizontal part of the torso's up vector (how far and which way it leans). */
+  private readonly torsoLean = new THREE.Vector3();
+  private deficitTime = 0;
+  /** 0..1: how much of leanFootShift applies (only matters for a light load; set by the player). */
+  leanShiftScale = 1;
+  /** Override of tun.stepDuration (e.g. quicker steps with empty hands), or null. */
+  stepDuration: number | null = null;
 
   constructor(private tun: Tunables, private feet: FootSystem) {}
 
@@ -67,6 +74,10 @@ export class GaitController {
     bodyQ: THREE.Quaternion, bodyW: THREE.Vector3, hipVel: THREE.Vector3): void {
     const tun = this.tun;
     const feet = this.feet;
+    const bu = new THREE.Vector3(0, 1, 0).applyQuaternion(bodyQ);
+    this.torsoLean.set(bu.x, 0, bu.z);
+    // sustained shortfall in the hip torque the feet can deliver = the stance is in the wrong place
+    this.deficitTime = feet.torqueDeficit > tun.torqueStepDeficit ? this.deficitTime + dt : 0;
     const stance = feet.feet.filter((f) => f.phase === 'stance' && f.inContact);
     this.airborne = stance.length === 0;
     this.jumpCooldown = Math.max(0, this.jumpCooldown - dt);
@@ -89,13 +100,25 @@ export class GaitController {
       // slowing down a top-heavy load has to be gentler than speeding it up, or it pitches over
       const braking = acc.x * hipVel.x + acc.z * hipVel.z < 0;
       clampLen(acc, braking ? tun.walkDecel : tun.walkAccel);
+      // Push only as hard as the stance can balance: accelerating the hips at a needs the centre
+      // of pressure about L·a/g ahead of them (L = hip height), inside the feet.
+      if (tun.stanceLimitedAccel && this.support.length >= 3 && acc.lengthSq() > 1e-6) {
+        const dir = acc.clone().normalize();
+        let lo = 0, hi = 0.8;
+        for (let i = 0; i < 12; i++) {
+          const mid = (lo + hi) / 2;
+          if (signedDistToPolygon({ x: pelvisPos.x + dir.x * mid, z: pelvisPos.z + dir.z * mid }, this.support) < -0.02) lo = mid; else hi = mid;
+        }
+        const L = Math.max(0.5, pelvisPos.y);
+        clampLen(acc, Math.max(tun.minWalkAccel, 9.81 * lo / L));
+      }
       this.vDrive.set(hipVel.x, 0, hipVel.z).addScaledVector(acc, dt);
       // hipVel is the body's COM velocity, so a body pitching forward makes the legs hurry to get
       // under it (good: that is his balance). But it must not turn into a runaway sprint: the
       // sweep never exceeds the commanded speed by more than a small margin.
       // (only while walking: when standing he must be free to step after a shove or a swing)
       const cap = vDes.length() * tun.driveOverspeed;
-      if (vDes.length() > 0.5 && this.vDrive.length() > cap) this.vDrive.setLength(cap);
+      if (vDes.length() > 0.05 && this.vDrive.length() > cap) this.vDrive.setLength(cap);
     }
     feet.driveVel.copy(this.vDrive);
     feet.hipStrengthScale = 1 + this.brace;
@@ -192,9 +215,10 @@ export class GaitController {
     if (airFoot >= 0 && stance.length === 1) pick = airFoot;
     else if (stance.length === 2) {
       // planted (holdGround): only a real loss of balance makes him take a step
+      const torqueOut = this.balanceEnabled && this.deficitTime > 0.15;
       const need = this.holdGround
-        ? this.balanceEnabled && signedDistToPolygon({ x: this.capture.x, z: this.capture.z }, this.support) > 0.1
-        : walking || (this.balanceEnabled && captureOut) || Math.max(...errs) > 0.2 || Math.max(...twist) > 0.3;
+        ? this.balanceEnabled && (signedDistToPolygon({ x: this.capture.x, z: this.capture.z }, this.support) > 0.1 || torqueOut)
+        : torqueOut || walking || (this.balanceEnabled && captureOut) || Math.max(...errs) > 0.2 || Math.max(...twist) > 0.3;
       if (need) {
         if (walking && Math.abs(errs[0] - errs[1]) < 0.15) pick = this.lastStepSide < 0 ? 1 : 0;
         else if (Math.max(...twist) > 0.3 && Math.max(...errs) < 0.2) pick = twist[0] > twist[1] ? 0 : 1;
@@ -234,6 +258,10 @@ export class GaitController {
     base.addScaledVector(right, f.side * (GEOM.stanceHalfWidth + tun.braceWiden * this.brace));
     // braced for a pitch swing: split stance along the blade (left foot forward, right back)
     if (this.braceAxis && this.brace > 0.05) base.addScaledVector(this.braceAxis, -f.side * tun.braceStagger * this.brace);
+    // A leaning torso is righted by the ground force passing on the other side of the hips, so
+    // the feet go a little that way (with a light load the COM is almost at the hips, and the
+    // capture point alone would never put a foot where the torso can push off it).
+    base.addScaledVector(clampLen(this.torsoLean.clone(), 0.5), tun.leanFootShift * this.leanShiftScale);
     // the target is for the middle of the sole, the controller positions the ankle
     base.addScaledVector(fwd, -(GEOM.heel + GEOM.toe) / 2);
     // keep within leg reach of the hip
@@ -264,7 +292,7 @@ export class GaitController {
     f.swingYawTo = yaw;
     f.swingT = 0;
     const dist = Math.hypot(target.x - f.worldPos.x, target.z - f.worldPos.z);
-    f.swingDur = Math.max(this.tun.stepDuration * (0.5 + 0.5 * Math.min(1, dist / 0.4)), dist / this.tun.maxFootSpeed);
+    f.swingDur = Math.max((this.stepDuration ?? this.tun.stepDuration) * (0.5 + 0.5 * Math.min(1, dist / 0.4)), dist / this.tun.maxFootSpeed);
     this.lastStepSide = f.side;
     this.stepCount++;
   }

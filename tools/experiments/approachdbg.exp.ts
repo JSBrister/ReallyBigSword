@@ -12,7 +12,7 @@ it('approachdbg', async () => {
     if (t > Number(process.env.FROM ?? 4.5) && k++ % 24 === 0) {
       const u = new THREE.Vector3(0, 1, 0).applyQuaternion(pl.body.rotation() as any); const v = pl.body.linvel(); const o = pl.tech!.out; const b = pl.balanceWorld();
       console.log(t.toFixed(2), st, 'up', u.x.toFixed(2), u.z.toFixed(2), 'hip', p.x.toFixed(2), p.z.toFixed(2), 'v', v.x.toFixed(2), v.z.toFixed(2), 'B', b.x.toFixed(2), b.y.toFixed(2), b.z.toFixed(2), 'face', o.face?.toFixed(2), 'yaw', pl.feet.frameYaw.toFixed(2), 'mv', o.moveVel.x.toFixed(2), o.moveVel.z.toFixed(2),
-        'feet', pl.feet.feet.map((f: any) => f.phase[0] + (f.inContact ? '+' : '-')).join(''), 'hold', pl.holding, 'hand', pl.gripLocal.toArray().map((x) => x.toFixed(2)).join(','));
+        'feet', pl.feet.feet.map((f: any) => f.phase[0] + (f.inContact ? '+' : '-')).join(''), 'hold', pl.holding, 'sd', (()=>{const d=new THREE.Vector3(0,1,0).applyQuaternion(pl.sword.rotation() as any);return d.toArray().map(x=>x.toFixed(2)).join(',')})(), 'tiptop', pl.swordTip.y.toFixed(2), 'tau', pl.feet.hipTorqueTarget.x.toFixed(0)+'/'+pl.feet.hipTorque.x.toFixed(0), 'hand', pl.gripLocal.toArray().map((x) => x.toFixed(2)).join(','));
     }
   }, {}, {}, (sb) => { const gm = new GoblinManager(sb.pw, sb.tun); gm.spawn(target, 'none', Math.PI, true); sb.pw.hooks.push({ pre: (dt) => gm.pre(dt, new THREE.Vector3(0, 0, -50), () => false), post: () => {} }); });
 });

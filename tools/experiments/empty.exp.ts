@@ -4,7 +4,7 @@ import { runSession, fmt } from './session';
 import { EXP } from '../../src/physics/player/technique';
 it('empty', async () => {
   EXP.emptyWalk = true;
-  for (const walk of [0]) {
+  for (const walk of [0, 1]) {
     let k = 0;
     const r = await runSession(6, (t, c, sb) => {
       if (t < 0.05) sb.player.release();

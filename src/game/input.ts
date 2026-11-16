@@ -23,6 +23,10 @@ export class Input {
   private padPrev: boolean[] = [];
   orbitDelta = new THREE.Vector2();
   onKey: (code: string) => void = () => {};
+  /** Technique controls (READY / drop) instead of the effort swing. */
+  techMode = true;
+  private dropPressed = false;
+  private readyHeld = false;
   /** Pixels per second of mouse drag that count as a full-strength swing. */
   dragFullSpeed = 700;
   /** What the right stick does: swing the sword, or orbit the camera. */
@@ -33,7 +37,8 @@ export class Input {
     window.addEventListener('keydown', (e) => {
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'F1', 'Tab', 'ShiftLeft', 'ShiftRight'].includes(e.code)) e.preventDefault();
       if (!e.repeat) {
-        if (e.code === 'Space') this.jumpPressed = true;
+        if (e.code === 'Space' && !this.techMode) this.jumpPressed = true;
+        if (e.code === 'KeyF') this.dropPressed = true;
         const atk: Record<string, AttackName> = { Digit1: 'slam', Digit2: 'sweepLeft', Digit3: 'sweepRight', Digit4: 'spin' };
         if (atk[e.code]) this.attackPressed = atk[e.code];
         this.onKey(e.code);
@@ -128,7 +133,9 @@ export class Input {
         if (b(2)) effort.x -= 1;
       }
       grip = grip || b(7);
-      if (edge(5)) this.jumpPressed = true;
+      if (edge(5) && !this.techMode) this.jumpPressed = true;
+      if (this.techMode && edge(1)) this.dropPressed = true;
+      if (this.techMode && (b(0) || b(7))) this.readyHeld = true;
       reachKey += (b(12) ? 1 : 0) - (b(13) ? 1 : 0);
       if (b(14)) this.orbitDelta.x -= 500 * dt;
       if (b(15)) this.orbitDelta.x += 500 * dt;
@@ -154,6 +161,11 @@ export class Input {
     this.pendingReach -= rate * dt;
     if (Math.abs(this.pendingReach) < 1e-4) this.pendingReach = 0;
 
+    // technique controls: hold READY (Space / left mouse / pad A or RT), F / pad B puts it down
+    out.charge = this.techMode && (k.has('Space') || this.dragging || this.readyHeld);
+    this.readyHeld = false;
+    out.drop = this.techMode && this.dropPressed;
+    this.dropPressed = false;
     out.jump = out.jump || this.jumpPressed;
     this.jumpPressed = false;
     if (this.attackPressed) { out.attack = this.attackPressed; this.attackPressed = null; }

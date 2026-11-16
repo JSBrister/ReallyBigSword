@@ -42,8 +42,8 @@ export const ROOMS: RoomDef[] = [
     slick: [{ x0: 6, x1: 13, z0: -26, z1: -16 }],
     pillars: [{ x: -11, z: -14, half: 0.45, height: 3.2 }, { x: 11, z: -6, half: 0.45, height: 3.2 }],
     signs: [
-      { x: 0, z: -27.5, text: 'Swing with the arrows / face buttons.\nLet go and the sword keeps going.\nHold GRIP to stop it.' },
-      { x: -6.5, z: -24, text: 'Dummies. Get close, then\n1 (or LT+Y) to slam.' },
+      { x: 0, z: -27.5, text: 'Hold READY (Space / A) and walk\nat a dummy: he stops, squares up\nand lets the blade fall on it.' },
+      { x: -6.5, z: -24, text: 'He has to let go to chop, then\nheave it back up at its balance point.' },
       { x: 3, z: -21, text: 'Open floor: hold a sideways\nswing and spin up momentum.' },
       { x: 9.5, z: -14, text: 'Oil. Your feet only grip\nas well as friction allows.' },
       { x: -11, z: -12, text: 'Stone pillar: sparks.' },

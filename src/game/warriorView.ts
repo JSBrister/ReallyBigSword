@@ -223,8 +223,9 @@ export class WarriorView {
     });
 
     // arms: shoulders -> grip (two hands stacked on the handle)
-    const grip = v3(player.sword.translation());
-    const sdir = new THREE.Vector3(0, 1, 0).applyQuaternion(q4(player.sword.rotation()));
+    // (where the hands are on the sword; with empty hands, where he holds them)
+    const grip = player.holding ? player.gripPoint() : player.gripLocal.clone().applyQuaternion(q4(player.body.rotation())).add(v3(player.body.translation()));
+    const sdir = player.holding ? new THREE.Vector3(0, 1, 0).applyQuaternion(q4(player.sword.rotation())) : new THREE.Vector3(0, 0, 0);
     [-1, 1].forEach((s, i) => {
       const k = s < 0 ? 'L' : 'R';
       const shoulder = toWorld(-s * 0.3, 0.6, 0.02);

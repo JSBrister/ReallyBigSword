@@ -398,6 +398,10 @@ export class Player implements ActuatedBodies {
     this.gait.twistOverride = out.twist;
     this.gait.holdGround = out.holdGround;
     this.gait.balanceOnCom = out.balanceOnCom;
+    // with the sword in hand its mass dominates and the plain capture-point placement works
+    this.gait.leanShiftScale = this.holding ? 0 : 1;
+    // unladen legs swing quicker
+    this.gait.stepDuration = this.holding ? null : tun.stepDurationEmpty;
     const move = out.moveVel.clone().divideScalar(tun.walkSpeed);
     // What the legs have to balance: his own body plus the share of the sword he is actually
     // carrying (a sword in free fall or resting on the floor is not his to hold up).
@@ -486,7 +490,9 @@ export class Player implements ActuatedBodies {
     this.swordRestAlong = rest;
     this.gripWorld.copy(this.gripLocal).applyQuaternion(q4(this.torso.rotation())).add(v3(this.torso.translation()));
     this.swordAct.measure(this, this.gripWorld, dt);
-    this.fallenTime = this.fallen ? this.fallenTime + dt : 0;
+    // (hysteresis: rolling about on the floor near the 60° line must not keep resetting it)
+    const upY = new THREE.Vector3(0, 1, 0).applyQuaternion(q4(this.body.rotation())).y;
+    this.fallenTime = this.fallen || (this.fallenTime > 0 && upY < 0.8) ? this.fallenTime + dt : 0;
     // Explicit, visible game rule (not a force): if the legs have not got him up after a while,
     // he is put back on his feet where he lies. Reported in the README as a deviation.
     if (this.autoStandUp && this.fallenTime > this.tun.standUpDelay) this.standUpInPlace();

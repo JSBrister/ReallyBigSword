@@ -100,6 +100,12 @@ export class Game {
       if (c === 'KeyR') this.restartRoom();
       if (c === 'F1') this.debug.toggle();
       if (c === 'KeyM') this.sfx.muted = !this.sfx.muted;
+      if (c === 'KeyT') {
+        // switch between the technique controls and the original free-swing controls
+        this.input.techMode = !this.input.techMode;
+        this.restartRoom();
+        this.hud.message(this.input.techMode ? 'Technique controls' : 'Free-swing controls', 1.5);
+      }
     };
     this.renderer.domElement.addEventListener('pointerdown', () => this.sfx.unlock());
     window.addEventListener('resize', () => this.resize());
@@ -123,7 +129,7 @@ export class Game {
 
   private spawnPlayer(room: number): void {
     const r = ROOMS[room];
-    const spawn = { position: r.spawn.clone(), heading: r.spawnHeading };
+    const spawn = { position: r.spawn.clone(), heading: r.spawnHeading, carry: this.input.techMode };
     if (!this.player) this.player = new Player(this.pw, this.tun, spawn);
     else this.player.respawn(spawn);
     if (this.warrior) { this.scene.remove(this.warrior.root); this.warrior.dispose(); }

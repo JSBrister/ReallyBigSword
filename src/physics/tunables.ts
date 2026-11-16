@@ -44,11 +44,16 @@ export interface Tunables {
   driveOverspeed: number; // leg sweep may exceed the commanded speed by this factor (balance)
   walkSpeed: number; // m/s commanded
   walkAccel: number; // m/s^2, how fast the commanded leg sweep may change
+  stanceLimitedAccel: boolean; // cap leg acceleration by what the stance can balance (L·a/g inside the feet)
+  leanFootShift: number; // m of foot placement against the torso lean, per unit sin(lean)
+  torqueStepDeficit: number; // N·m of undeliverable hip torque that makes him re-place a foot
+  minWalkAccel: number; // m/s^2, floor for that cap (so he can always get going)
   standUpDelay: number; // s on the floor before he is put back on his feet (explicit rule)
   turnRate: number; // rad/s, how fast the legs try to turn the body while walking
   driveMaxLag: number; // m/s, how far the leg sweep may run ahead of the hips before it re-syncs
   walkPlacementLag: number; // s, how far behind the capture point steps land while walking
   stepDuration: number; // s
+  stepDurationEmpty: number; // s, with nothing in his hands
   maxStepLength: number; // m, from hip
   maxFootSpeed: number; // m/s swing foot speed limit
   hipMaxTorque: number; // N·m, strongest tilting torque the hips/legs can put on the torso
@@ -111,19 +116,24 @@ export const defaultTunables: Tunables = {
   carrySpeed: 2.0,
   chopRange: 2.0,
   chopMin: 1.3,
-  chopNudge: 600,
+  chopNudge: 300,
   chopNudgeTime: 0.8,
-  raiseRate: 1.5,
+  raiseRate: 0.5,
   balanceLever: 0.1,
   walkDecel: 4,
   driveOverspeed: 1.05,
   walkSpeed: 1.6,
   walkAccel: 4,
+  stanceLimitedAccel: false,
+  leanFootShift: 1,
+  torqueStepDeficit: 1e9,
+  minWalkAccel: 0.8,
   turnRate: 2.5,
   standUpDelay: 2.5,
   driveMaxLag: 0.5,
   walkPlacementLag: 0.12,
   stepDuration: 0.3,
+  stepDurationEmpty: 0.22,
   maxStepLength: 0.85,
   maxFootSpeed: 6,
   hipMaxTorque: 4000,
@@ -133,7 +143,7 @@ export const defaultTunables: Tunables = {
   jumpForce: 14000,
   jumpPushTime: 0.16,
 
-  damageThreshold: 6.5,
+  damageThreshold: 5,
   damagePerMps: 6,
 
   timeScale: 1,
